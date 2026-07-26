@@ -51,6 +51,12 @@ export function getRemainingSeconds(elapsedSeconds, bananaCount) {
   return Math.max(0, BASE_GAME_SECONDS + getBonusSeconds(bananaCount) - elapsed);
 }
 
+export function getPlayableFrameDelta(measuredSeconds) {
+  if (!Number.isFinite(measuredSeconds) || measuredSeconds <= 0) return 0;
+  if (measuredSeconds > 0.5) return 0;
+  return measuredSeconds;
+}
+
 export function extendBoost(boostUntil, elapsedSeconds) {
   const safeUntil = Number.isFinite(boostUntil) ? boostUntil : 0;
   const safeElapsed = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;

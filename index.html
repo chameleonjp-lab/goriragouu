@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <meta
       name="description"
@@ -138,10 +138,17 @@
           <span>逃げる準備！</span>
         </div>
 
-        <div id="pause-overlay" class="pause-overlay" hidden>
+        <div
+          id="pause-overlay"
+          class="pause-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="pause-title"
+          hidden
+        >
           <div>
             <p class="eyebrow">PAUSED</p>
-            <h2>いったん停止中</h2>
+            <h2 id="pause-title">いったん停止中</h2>
             <p>時間もゴリラも止まっています。</p>
             <button id="resume-button" class="primary-button compact" type="button">
               ゲームへ戻る
@@ -156,7 +163,7 @@
         <section class="result-card">
           <div id="result-icon" class="result-icon" aria-hidden="true">🌤️</div>
           <p id="result-kicker" class="eyebrow">SURVIVED</p>
-          <h2 id="result-title">ゴリラ豪雨を生還！</h2>
+          <h2 id="result-title" tabindex="-1">ゴリラ豪雨を生還！</h2>
           <p id="result-message" class="result-message">
             最後まで逃げ切りました。
           </p>
