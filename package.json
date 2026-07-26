@@ -1,0 +1,15 @@
+{
+  "name": "goriragouu",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "PC・スマホ対応の3Dブラウザゲーム「ゴリラ豪雨」",
+  "scripts": {
+    "check": "node --check src/game.js && node --check src/rules.js",
+    "test": "npm run check && node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
+

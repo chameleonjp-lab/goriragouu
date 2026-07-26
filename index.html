@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta
+      name="description"
+      content="球体の島を駆け回り、空から降るゴリラ豪雨を60秒間かわす3Dブラウザゲーム。"
+    />
+    <meta name="theme-color" content="#071d20" />
+    <meta name="color-scheme" content="dark" />
+    <title>ゴリラ豪雨</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="scene" aria-hidden="true"></div>
+      <div class="atmosphere" aria-hidden="true"></div>
+      <div id="storm-flash" aria-hidden="true"></div>
+      <div id="boost-fx" aria-hidden="true"></div>
+
+      <div id="loading" class="loading" role="status" aria-live="polite">
+        <div class="loading-mark" aria-hidden="true">🦍</div>
+        <p id="loading-message">球体の島を準備中…</p>
+      </div>
+
+      <main id="home-screen" class="screen home-screen" aria-labelledby="game-title" hidden>
+        <section class="hero-card">
+          <p class="eyebrow">3D SURVIVAL RUN</p>
+          <h1 id="game-title">
+            <span>ゴリラ</span>
+            <span class="rain-title">豪雨</span>
+          </h1>
+          <p class="lead">
+            空から降り注ぐゴリラの群れ。<br />
+            小さな球体の島を走り、60秒間逃げ切ろう。
+          </p>
+
+          <div class="rule-strip" aria-label="主なルール">
+            <div><b>🦍</b><span>接触で終了</span></div>
+            <div><b>🍌 ×10</b><span>残り時間 +5秒</span></div>
+            <div><b>⚡ 2秒</b><span>取るたび加速延長</span></div>
+          </div>
+
+          <button id="start-button" class="primary-button" type="button">
+            <span>豪雨の中へ</span>
+            <small>タップしてスタート</small>
+          </button>
+
+          <div class="control-note">
+            <span class="control-icon" aria-hidden="true">↗</span>
+            <p>
+              <strong id="control-title">スワイプで移動</strong>
+              <span id="control-detail">画面の中央寄りを押したまま、逃げたい方向へ滑らせます。</span>
+            </p>
+          </div>
+
+          <div class="home-options">
+            <button
+              id="motion-button"
+              class="option-button"
+              type="button"
+              aria-pressed="false"
+            >
+              揺れ：あり
+            </button>
+            <button
+              id="home-sound-button"
+              class="option-button"
+              type="button"
+              aria-pressed="true"
+            >
+              音：あり
+            </button>
+          </div>
+        </section>
+      </main>
+
+      <section id="game-screen" class="screen game-screen" aria-label="ゲーム画面" hidden>
+        <div id="game-input" class="game-input" aria-label="移動操作エリア"></div>
+
+        <header class="hud">
+          <div class="hud-card score-card">
+            <span>SCORE</span>
+            <strong id="score-value">000000</strong>
+          </div>
+
+          <div id="timer-card" class="timer-card" style="--time-progress: 1turn">
+            <div>
+              <span>TIME</span>
+              <strong id="time-value">60.0</strong>
+            </div>
+          </div>
+
+          <div class="hud-card banana-card">
+            <span>BANANA</span>
+            <strong><i aria-hidden="true">🍌</i><b id="banana-value">0</b></strong>
+            <small id="banana-next">あと10本で +5秒</small>
+          </div>
+        </header>
+
+        <div class="phase-panel">
+          <span id="phase-dot" aria-hidden="true"></span>
+          <p>
+            <small>ゴリラ豪雨</small>
+            <strong id="phase-value">1地点</strong>
+          </p>
+        </div>
+
+        <div id="boost-badge" class="boost-badge" hidden>
+          <span aria-hidden="true">⚡</span>
+          <p>加速中 <strong id="boost-value">2.0</strong>秒</p>
+        </div>
+
+        <button id="pause-button" class="round-button pause-button" type="button" aria-label="一時停止">
+          Ⅱ
+        </button>
+
+        <button
+          id="sound-button"
+          class="round-button sound-button"
+          type="button"
+          aria-label="音を切り替える"
+          aria-pressed="true"
+        >
+          ♪
+        </button>
+
+        <div id="joystick" class="joystick" aria-hidden="true">
+          <div id="joystick-knob"></div>
+        </div>
+
+        <div id="countdown" class="countdown" aria-live="assertive" hidden>
+          <strong id="countdown-value">3</strong>
+          <span>逃げる準備！</span>
+        </div>
+
+        <div id="pause-overlay" class="pause-overlay" hidden>
+          <div>
+            <p class="eyebrow">PAUSED</p>
+            <h2>いったん停止中</h2>
+            <p>時間もゴリラも止まっています。</p>
+            <button id="resume-button" class="primary-button compact" type="button">
+              ゲームへ戻る
+            </button>
+          </div>
+        </div>
+
+        <div id="toast" class="toast" role="status" aria-live="polite"></div>
+      </section>
+
+      <main id="result-screen" class="screen result-screen" aria-labelledby="result-title" hidden>
+        <section class="result-card">
+          <div id="result-icon" class="result-icon" aria-hidden="true">🌤️</div>
+          <p id="result-kicker" class="eyebrow">SURVIVED</p>
+          <h2 id="result-title">ゴリラ豪雨を生還！</h2>
+          <p id="result-message" class="result-message">
+            最後まで逃げ切りました。
+          </p>
+
+          <div class="final-score">
+            <span>FINAL SCORE</span>
+            <strong id="result-score">000000</strong>
+          </div>
+
+          <dl class="result-stats">
+            <div>
+              <dt>生存時間</dt>
+              <dd><strong id="result-time">60.0</strong><span>秒</span></dd>
+            </div>
+            <div>
+              <dt>バナナ</dt>
+              <dd><strong id="result-bananas">0</strong><span>本</span></dd>
+            </div>
+            <div>
+              <dt>時間追加</dt>
+              <dd><strong id="result-bonus">0</strong><span>秒</span></dd>
+            </div>
+          </dl>
+
+          <p id="result-mode" class="result-mode">SP標準：1地点につきゴリラ5体</p>
+
+          <div class="result-actions">
+            <button id="replay-button" class="primary-button" type="button">
+              もう一度逃げる
+            </button>
+            <button id="share-button" class="secondary-button" type="button">
+              結果をシェア
+            </button>
+          </div>
+        </section>
+      </main>
+
+      <div id="webgl-error" class="fatal-error" role="alert" hidden>
+        <div>
+          <span aria-hidden="true">🦍</span>
+          <h2>3D画面を開けませんでした</h2>
+          <p>
+            WebGLが使える最新のSafari、Chrome、Edgeで開き直してください。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <noscript>
+      <p class="noscript">このゲームを遊ぶにはJavaScriptを有効にしてください。</p>
+    </noscript>
+
+    <script>
+      window.__GORILLA_RAIN_READY__ = false;
+      window.setTimeout(() => {
+        if (window.__GORILLA_RAIN_READY__) return;
+        const message = document.querySelector("#loading-message");
+        if (message) {
+          message.textContent =
+            "読み込みに時間がかかっています。通信状態を確認して、ページを開き直してください。";
+        }
+      }, 12000);
+    </script>
+    <script type="module" src="./src/game.js"></script>
+  </body>
+</html>
