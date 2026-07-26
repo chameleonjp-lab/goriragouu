@@ -1,5 +1,3 @@
-import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.min.js";
-
 import {
   BASE_GAME_SECONDS,
   bananasUntilBonus,
@@ -9,26 +7,48 @@ import {
   getBonusMilestones,
   getBonusSeconds,
   getDeviceProfile,
+  getPlayableFrameDelta,
   getRemainingSeconds,
   getStage,
 } from "./rules.js";
 
+let THREE;
+try {
+  THREE = await import(
+    "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.min.js"
+  );
+} catch (error) {
+  const loading = document.querySelector("#loading");
+  const fatal = document.querySelector("#webgl-error");
+  const message = fatal?.querySelector("p");
+  if (loading) loading.hidden = true;
+  if (message) {
+    message.textContent =
+      "3D機能の読み込みに失敗しました。通信状態を確認して、ページを開き直してください。";
+  }
+  if (fatal) fatal.hidden = false;
+  console.error("Three.jsの読み込みに失敗しました。", error);
+  throw error;
+}
+
 const FIXED_STEP = 1 / 60;
-const MAX_FIXED_STEPS = 5;
+const MAX_FIXED_STEPS = 8;
 const IS_COARSE_POINTER = window.matchMedia("(pointer: coarse)").matches;
-const IS_SMALL_SCREEN = Math.min(window.innerWidth, window.innerHeight) < 700;
+const HAS_FINE_POINTER = window.matchMedia(
+  "(hover: hover) and (pointer: fine)",
+).matches;
 const URL_PARAMS = new URLSearchParams(window.location.search);
 const FORCED_DEVICE = URL_PARAMS.get("device");
 const IS_MOBILE =
   FORCED_DEVICE === "sp" ||
-  (FORCED_DEVICE !== "pc" && (IS_COARSE_POINTER || IS_SMALL_SCREEN));
+  (FORCED_DEVICE !== "pc" && IS_COARSE_POINTER && !HAS_FINE_POINTER);
 const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
 const PLANET_RADIUS = 18;
 const PLAYER_HEIGHT = 0.05;
 const PLAYER_SPEED = 5.2;
 const BOOST_MULTIPLIER = 1.52;
 const GORILLA_CHASE_SECONDS = 5;
-const GORILLA_CONTACT_DISTANCE = 0.92;
+const GORILLA_CONTACT_DISTANCE = 1.12;
 const BANANA_CONTACT_DISTANCE = 1.05;
 const STORM_WARNING_SECONDS = 0.9;
 const STORM_RAIN_SECONDS = 1.25;
@@ -284,6 +304,16 @@ class VirtualStick {
     this.y = 0;
     this.maxDistance = IS_MOBILE ? 58 : 72;
     this.keys = new Set();
+    this.safeAreaProbe = document.createElement("div");
+    this.safeAreaProbe.setAttribute("aria-hidden", "true");
+    Object.assign(this.safeAreaProbe.style, {
+      position: "fixed",
+      width: "0",
+      height: "0",
+      visibility: "hidden",
+      pointerEvents: "none",
+    });
+    document.body.appendChild(this.safeAreaProbe);
 
     element.addEventListener("pointerdown", (event) => this.onPointerDown(event));
     element.addEventListener("pointermove", (event) => this.onPointerMove(event));
@@ -305,12 +335,33 @@ class VirtualStick {
     this.originY = event.clientY;
     this.element.setPointerCapture(event.pointerId);
 
-    const safeX = clamp(event.clientX, 72, window.innerWidth - 72);
-    const safeY = clamp(event.clientY, 82, window.innerHeight - 82);
+    const safeLeft = this.readSafeInset("--safe-left", 14);
+    const safeRight = this.readSafeInset("--safe-right", 14);
+    const safeTop = this.readSafeInset("--safe-top", 14);
+    const safeBottom = this.readSafeInset("--safe-bottom", 16);
+    const visualRadius = 56;
+    const safeX = clamp(
+      event.clientX,
+      safeLeft + visualRadius + 8,
+      window.innerWidth - safeRight - visualRadius - 8,
+    );
+    const safeY = clamp(
+      event.clientY,
+      safeTop + visualRadius + 8,
+      window.innerHeight - safeBottom - visualRadius - 8,
+    );
     this.joystick.style.left = `${safeX}px`;
     this.joystick.style.top = `${safeY}px`;
     this.joystick.classList.add("visible");
     this.updateKnob(0, 0);
+  }
+
+  readSafeInset(property, fallback) {
+    this.safeAreaProbe.style.paddingLeft = `var(${property})`;
+    const value = Number.parseFloat(
+      getComputedStyle(this.safeAreaProbe).paddingLeft,
+    );
+    return Number.isFinite(value) ? value : fallback;
   }
 
   onPointerMove(event) {
@@ -733,6 +784,7 @@ class StormCell {
       "position",
       new THREE.BufferAttribute(this.rainPositions, 3),
     );
+    this.rainGeometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
     this.rain = new THREE.Points(this.rainGeometry, shared.rainMaterial);
     this.rain.frustumCulled = false;
     this.rain.visible = false;
@@ -743,12 +795,40 @@ class StormCell {
     this.splash.position.y = 0.06;
     this.splash.visible = false;
     this.group.add(this.splash);
+
+    this.fallingPartsPerGorilla = 4;
+    this.fallingOffsets = Array.from(
+      { length: profile.gorillasPerStorm },
+      () => ({ x: 0, z: 0, phase: 0, delay: 0 }),
+    );
+    this.fallingGorillas = new THREE.InstancedMesh(
+      shared.fallingGeometry,
+      shared.fallingMaterial,
+      profile.gorillasPerStorm * this.fallingPartsPerGorilla,
+    );
+    this.fallingGorillas.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.fallingGorillas.frustumCulled = false;
+    this.fallingGorillas.visible = false;
+    this.fallingGorillas.count = 0;
+    this.group.add(this.fallingGorillas);
+
+    this.lastUpdateTime = -Infinity;
+    this.fallRoot = new THREE.Matrix4();
+    this.fallLocal = new THREE.Matrix4();
+    this.fallWorld = new THREE.Matrix4();
+    this.fallPosition = new THREE.Vector3();
+    this.fallScale = new THREE.Vector3();
+    this.fallUnitScale = new THREE.Vector3(1, 1, 1);
+    this.fallQuaternion = new THREE.Quaternion();
+    this.fallPartQuaternion = new THREE.Quaternion();
+    this.fallEuler = new THREE.Euler();
   }
 
   activate(normal, time, random) {
     this.active = true;
     this.startedAt = time;
     this.startedRain = false;
+    this.lastUpdateTime = -Infinity;
     this.normal.copy(normal);
     this.group.visible = true;
     this.group.position.copy(normal).multiplyScalar(PLANET_RADIUS + 0.01);
@@ -758,6 +838,8 @@ class StormCell {
     this.ringMaterial.color.setHex(0xffc84a);
     this.rain.visible = false;
     this.splash.visible = false;
+    this.fallingGorillas.visible = false;
+    this.fallingGorillas.count = 0;
     this.cloud.scale.setScalar(0.72);
 
     for (let index = 0; index < this.rainSeeds.length; index += 1) {
@@ -770,6 +852,15 @@ class StormCell {
       this.rainSeeds[index] = this.rainPositions[offset + 1];
       this.rainSpeeds[index] = random.range(8.5, 13.5);
     }
+    for (let index = 0; index < this.fallingOffsets.length; index += 1) {
+      const radius = random.range(0.35, 1.75);
+      const angle = random.range(0, Math.PI * 2);
+      const offset = this.fallingOffsets[index];
+      offset.x = Math.cos(angle) * radius;
+      offset.z = Math.sin(angle) * radius;
+      offset.phase = random.range(0, Math.PI * 2);
+      offset.delay = index * 0.035;
+    }
     this.rainGeometry.attributes.position.needsUpdate = true;
   }
 
@@ -778,10 +869,14 @@ class StormCell {
     this.group.visible = false;
     this.rain.visible = false;
     this.splash.visible = false;
+    this.fallingGorillas.visible = false;
+    this.fallingGorillas.count = 0;
   }
 
   update(time, callbacks) {
     if (!this.active) return;
+    if (this.lastUpdateTime === time) return;
+    this.lastUpdateTime = time;
     const age = time - this.startedAt;
     const warningProgress = clamp(age / STORM_WARNING_SECONDS, 0, 1);
     const pulse = 1 + Math.sin(age * 15) * 0.06;
@@ -794,6 +889,9 @@ class StormCell {
       this.startedRain = true;
       this.rain.visible = true;
       this.splash.visible = true;
+      this.fallingGorillas.visible = true;
+      this.fallingGorillas.count =
+        this.profile.gorillasPerStorm * this.fallingPartsPerGorilla;
       this.ringMaterial.color.setHex(0xff5b4d);
       callbacks.onRainStart(this);
     }
@@ -810,12 +908,93 @@ class StormCell {
       const splashScale = 0.88 + Math.sin(rainAge * 19) * 0.12;
       this.splash.scale.setScalar(splashScale);
       this.splash.material.opacity = 0.26 + Math.sin(rainAge * 14) * 0.08;
+      this.updateFallingGorillas(rainAge);
     }
 
     if (age >= STORM_WARNING_SECONDS + STORM_RAIN_SECONDS) {
       callbacks.onImpact(this);
       this.deactivate();
     }
+  }
+
+  updateFallingGorillas(rainAge) {
+    const overallProgress = clamp(rainAge / STORM_RAIN_SECONDS, 0, 1);
+    let instanceIndex = 0;
+    for (const offset of this.fallingOffsets) {
+      const progress = clamp(
+        (overallProgress - offset.delay) / (1 - offset.delay),
+        0,
+        1,
+      );
+      const eased = progress * progress;
+      this.fallPosition.set(
+        offset.x,
+        6.1 - eased * 5.55,
+        offset.z,
+      );
+      this.fallEuler.set(
+        offset.phase + rainAge * 3.2,
+        offset.phase * 0.7 + rainAge * 2.4,
+        rainAge * 2.1,
+      );
+      this.fallQuaternion.setFromEuler(this.fallEuler);
+      this.fallRoot.compose(
+        this.fallPosition,
+        this.fallQuaternion,
+        this.fallUnitScale,
+      );
+
+      instanceIndex = this.setFallingPart(
+        instanceIndex,
+        0,
+        0,
+        0,
+        0.72,
+        0.78,
+        0.54,
+      );
+      instanceIndex = this.setFallingPart(
+        instanceIndex,
+        0,
+        0.64,
+        -0.02,
+        0.5,
+        0.48,
+        0.48,
+      );
+      instanceIndex = this.setFallingPart(
+        instanceIndex,
+        -0.55,
+        0.02,
+        0,
+        0.24,
+        0.82,
+        0.26,
+      );
+      instanceIndex = this.setFallingPart(
+        instanceIndex,
+        0.55,
+        0.02,
+        0,
+        0.24,
+        0.82,
+        0.26,
+      );
+    }
+    this.fallingGorillas.instanceMatrix.needsUpdate = true;
+  }
+
+  setFallingPart(index, x, y, z, sx, sy, sz) {
+    this.fallPosition.set(x, y, z);
+    this.fallScale.set(sx, sy, sz);
+    this.fallLocal.compose(
+      this.fallPosition,
+      this.fallPartQuaternion.identity(),
+      this.fallScale,
+    );
+    this.fallWorld.multiplyMatrices(this.fallRoot, this.fallLocal);
+    this.fallingGorillas.setMatrixAt(index, this.fallWorld);
+    return index + 1;
   }
 }
 
@@ -848,13 +1027,15 @@ class GorillaRainGame {
     this.cameraShake = 0;
     this.toastTimer = 0;
     this.lastCountdownNumber = -1;
-    this.pixelRatio = 1;
+    this.pixelRatio = 0;
     this.performanceFrames = 0;
     this.performanceSeconds = 0;
     this.performanceCooldown = 0;
+    this.lastHudUpdateAt = -Infinity;
 
     const seedParam = Number.parseInt(URL_PARAMS.get("seed") || "", 10);
-    this.seed = Number.isFinite(seedParam) ? seedParam >>> 0 : Date.now() >>> 0;
+    this.hasFixedSeed = Number.isFinite(seedParam);
+    this.seed = this.hasFixedSeed ? seedParam >>> 0 : Date.now() >>> 0;
     this.random = new SeededRandom(this.seed);
 
     this.playerNormal = new THREE.Vector3(0, 1, 0);
@@ -1205,6 +1386,12 @@ class GorillaRainGame {
         depthWrite: false,
         sizeAttenuation: true,
       }),
+      fallingGeometry: new THREE.BoxGeometry(1, 1, 1),
+      fallingMaterial: new THREE.MeshStandardMaterial({
+        color: 0x4a332d,
+        roughness: 0.92,
+        metalness: 0,
+      }),
       splashGeometry: new THREE.RingGeometry(0.65, 2.1, 28),
       splashMaterial: new THREE.MeshBasicMaterial({
         color: 0xb5eef2,
@@ -1225,11 +1412,12 @@ class GorillaRainGame {
 
   bindUI() {
     ui.startButton.addEventListener("click", async () => {
-      await this.sound.unlock();
       this.requestFullscreen();
+      await this.sound.unlock();
       this.startNewGame();
     });
     ui.replayButton.addEventListener("click", async () => {
+      this.requestFullscreen();
       await this.sound.unlock();
       this.startNewGame();
     });
@@ -1259,7 +1447,7 @@ class GorillaRainGame {
       window.setTimeout(() => this.onResize(), 120);
     });
     window.addEventListener("blur", () => {
-      if (this.mode === "playing") this.pauseGame();
+      if (this.mode === "playing" || this.mode === "countdown") this.pauseGame();
     });
     document.addEventListener("visibilitychange", () => {
       this.lastFrameAt = performance.now();
@@ -1324,6 +1512,7 @@ class GorillaRainGame {
     this.nextStormAt = 1.2;
     this.accumulator = 0;
     this.cameraShake = 0;
+    this.lastHudUpdateAt = -Infinity;
     this.playerNormal.set(0, 1, 0);
     this.playerFacing.set(0, 0, -1);
     this.viewForward.set(0, 0, -1);
@@ -1333,11 +1522,13 @@ class GorillaRainGame {
     this.updatePlayerTransform();
     this.updateCamera(1, true);
     this.gorillaRenderer?.update(this.gorillaPool, 0);
-    this.updateHUD();
+    this.updateHUD(true);
   }
 
   startNewGame() {
-    this.seed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+    if (!this.hasFixedSeed) {
+      this.seed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
+    }
     this.random = new SeededRandom(this.seed);
     this.bananaField.random = this.random;
     this.resetGameState();
@@ -1347,9 +1538,13 @@ class GorillaRainGame {
     this.lastCountdownNumber = -1;
     ui.countdown.hidden = false;
     ui.pauseOverlay.hidden = true;
+    ui.pauseButton.disabled = false;
+    ui.soundButton.disabled = false;
     ui.app.classList.add("is-playing");
     document.body.classList.add("is-playing");
     this.lastFrameAt = performance.now();
+    this.performanceFrames = 0;
+    this.performanceSeconds = 0;
   }
 
   showScreen(screen) {
@@ -1365,19 +1560,29 @@ class GorillaRainGame {
     this.mode = "paused";
     this.controls.reset();
     ui.countdown.hidden = true;
+    ui.pauseButton.disabled = true;
+    ui.soundButton.disabled = true;
     ui.pauseOverlay.hidden = false;
+    window.requestAnimationFrame(() => {
+      ui.resumeButton.focus({ preventScroll: true });
+    });
   }
 
   resumeGame() {
     if (this.mode !== "paused") return;
     ui.pauseOverlay.hidden = true;
     ui.countdown.hidden = false;
+    ui.pauseButton.disabled = false;
+    ui.soundButton.disabled = false;
     this.mode = "countdown";
     this.countdownRemaining =
       this.resumeFromMode === "countdown" && this.gameElapsed === 0 ? 3 : 1.5;
     this.lastCountdownNumber = -1;
     this.lastFrameAt = performance.now();
     this.accumulator = 0;
+    window.requestAnimationFrame(() => {
+      ui.pauseButton.focus({ preventScroll: true });
+    });
   }
 
   updateCountdown(delta) {
@@ -1400,25 +1605,19 @@ class GorillaRainGame {
   }
 
   frame(timeMs) {
-    const rawDelta = clamp((timeMs - this.lastFrameAt) / 1000, 0, 0.083);
+    const measuredDelta = Math.max(0, (timeMs - this.lastFrameAt) / 1000);
+    let rawDelta = getPlayableFrameDelta(measuredDelta);
     this.lastFrameAt = timeMs;
+    if (this.mode === "playing" && measuredDelta > 0.5) {
+      this.pauseGame();
+      rawDelta = 0;
+    }
     this.ambientTime += rawDelta;
 
     if (this.mode === "countdown") {
       this.updateCountdown(rawDelta);
     } else if (this.mode === "playing") {
-      this.accumulator += rawDelta;
-      let steps = 0;
-      while (
-        this.accumulator >= FIXED_STEP &&
-        steps < MAX_FIXED_STEPS &&
-        this.mode === "playing"
-      ) {
-        this.updateGame(FIXED_STEP);
-        this.accumulator -= FIXED_STEP;
-        steps += 1;
-      }
-      if (steps === MAX_FIXED_STEPS) this.accumulator = 0;
+      this.advancePlayingFrame(rawDelta);
       this.updateAdaptiveQuality(rawDelta);
     }
 
@@ -1426,8 +1625,60 @@ class GorillaRainGame {
     this.renderer.render(this.scene3d, this.camera);
   }
 
+  advancePlayingFrame(frameDelta) {
+    const epsilon = 0.000001;
+    this.accumulator += frameDelta;
+    let steps = 0;
+
+    while (this.mode === "playing" && steps < MAX_FIXED_STEPS) {
+      const remaining = getRemainingSeconds(this.gameElapsed, this.bananaCount);
+      if (remaining <= epsilon) {
+        this.accumulator = 0;
+        this.finishGame(true);
+        return;
+      }
+
+      let step = 0;
+      if (this.accumulator >= FIXED_STEP) {
+        step = Math.min(FIXED_STEP, remaining);
+      } else if (this.accumulator + epsilon >= remaining) {
+        step = remaining;
+      } else {
+        break;
+      }
+
+      this.gameElapsed += step;
+      this.accumulator = Math.max(0, this.accumulator - step);
+      this.updateGame(step);
+      steps += 1;
+
+      if (this.mode !== "playing") return;
+      if (getRemainingSeconds(this.gameElapsed, this.bananaCount) <= epsilon) {
+        this.accumulator = 0;
+        this.finishGame(true);
+        return;
+      }
+    }
+
+    if (
+      this.mode === "playing" &&
+      steps === MAX_FIXED_STEPS &&
+      this.accumulator > 0
+    ) {
+      const remaining = getRemainingSeconds(this.gameElapsed, this.bananaCount);
+      const skipped = Math.min(this.accumulator, remaining);
+      this.gameElapsed += skipped;
+      this.accumulator = 0;
+      this.currentStage = getStage(this.gameElapsed);
+      this.updateHUD(true);
+
+      if (skipped >= remaining - epsilon) {
+        this.finishGame(true);
+      }
+    }
+  }
+
   updateGame(delta) {
-    this.gameElapsed += delta;
     const previousStage = this.currentStage;
     this.currentStage = getStage(this.gameElapsed);
     if (this.currentStage.index !== previousStage.index) {
@@ -1700,7 +1951,9 @@ class GorillaRainGame {
 
     const boosted = this.mode === "playing" && this.gameElapsed < this.boostUntil;
     const targetFov = this.baseFov + (boosted && this.motionEnabled ? 2.5 : 0);
-    this.camera.fov += (targetFov - this.camera.fov) * (immediate ? 1 : 0.08);
+    this.camera.fov +=
+      (targetFov - this.camera.fov) *
+      (immediate ? 1 : 1 - Math.exp(-delta * 5));
     this.camera.updateProjectionMatrix();
 
     this.sun.position
@@ -1722,7 +1975,8 @@ class GorillaRainGame {
     );
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(0, 2, 0);
-    this.camera.fov += (this.baseFov - this.camera.fov) * 0.08;
+    this.camera.fov +=
+      (this.baseFov - this.camera.fov) * (1 - Math.exp(-delta * 5));
     this.camera.updateProjectionMatrix();
     this.stars.rotation.y += delta * 0.005;
   }
@@ -1783,7 +2037,9 @@ class GorillaRainGame {
     }
   }
 
-  updateHUD() {
+  updateHUD(force = false) {
+    if (!force && this.gameElapsed - this.lastHudUpdateAt < 0.1) return;
+    this.lastHudUpdateAt = this.gameElapsed;
     const remaining = getRemainingSeconds(this.gameElapsed, this.bananaCount);
     const total = BASE_GAME_SECONDS + getBonusSeconds(this.bananaCount);
     ui.score.textContent = formatScore(calculateScore(this.gameElapsed, this.bananaCount));
@@ -1814,6 +2070,8 @@ class GorillaRainGame {
     document.body.classList.remove("is-playing");
     ui.countdown.hidden = true;
     ui.pauseOverlay.hidden = true;
+    ui.pauseButton.disabled = false;
+    ui.soundButton.disabled = false;
 
     const score = calculateScore(this.gameElapsed, this.bananaCount);
     ui.resultScore.textContent = formatScore(score);
@@ -1836,6 +2094,9 @@ class GorillaRainGame {
       this.sound.gameOver();
     }
     this.showScreen("result");
+    window.requestAnimationFrame(() => {
+      ui.resultTitle.focus({ preventScroll: true });
+    });
   }
 
   async shareResult() {
@@ -1897,11 +2158,15 @@ class GorillaRainGame {
     const width = Math.max(1, window.innerWidth);
     const height = Math.max(1, window.innerHeight);
     const longEdgeCap = IS_MOBILE ? 1400 : 2100;
-    this.pixelRatio = Math.min(
+    const preferredPixelRatio = Math.min(
       window.devicePixelRatio || 1,
       this.profile.maxPixelRatio,
       longEdgeCap / Math.max(width, height),
     );
+    this.pixelRatio =
+      this.pixelRatio > 0
+        ? Math.min(this.pixelRatio, preferredPixelRatio)
+        : preferredPixelRatio;
     this.pixelRatio = Math.max(0.8, this.pixelRatio);
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(width, height, false);

@@ -11,6 +11,7 @@ import {
   getBonusMilestones,
   getBonusSeconds,
   getDeviceProfile,
+  getPlayableFrameDelta,
   getRemainingSeconds,
   getStage,
 } from "../src/rules.js";
@@ -74,6 +75,15 @@ test("初期時間は60秒", () => {
   assert.equal(getRemainingSeconds(0, 0), 60);
 });
 
+test("低フレームでもゲーム時計は実時間で60秒進む", () => {
+  let elapsed = 0;
+  for (let frame = 0; frame < 600; frame += 1) {
+    elapsed += getPlayableFrameDelta(0.1);
+  }
+  assert.ok(Math.abs(elapsed - 60) < 0.000001);
+  assert.equal(getPlayableFrameDelta(0.6), 0);
+});
+
 test("HTMLにホーム・ゲーム・結果の3画面と操作領域がある", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   for (const id of ["home-screen", "game-screen", "result-screen", "game-input"]) {
@@ -104,7 +114,7 @@ test("Three.jsは固定版を使い、描画上限と使い回し用クラスを
   assert.match(game, /class StormCell/);
   assert.match(game, /new THREE\.InstancedMesh/);
   assert.match(game, /new THREE\.Points/);
-  assert.match(game, /MAX_FIXED_STEPS = 5/);
+  assert.match(game, /MAX_FIXED_STEPS = 8/);
 });
 
 test("ゲーム中のスマホ操作を抑えるCSSが揃っている", async () => {
@@ -117,4 +127,18 @@ test("ゲーム中のスマホ操作を抑えるCSSが揃っている", async ()
     [...css].filter((character) => character === "{").length,
     [...css].filter((character) => character === "}").length,
   );
+});
+
+test("停止画面の読み上げと安全なPages公開条件を備える", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const pages = await readFile(
+    new URL("../.github/workflows/pages.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(html, /id="pause-overlay"[\s\S]*role="dialog"/);
+  assert.match(html, /aria-modal="true"/);
+  assert.match(html, /id="result-title" tabindex="-1"/);
+  assert.match(pages, /needs: test/);
+  assert.match(pages, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.match(pages, /deploy:[\s\S]*permissions:[\s\S]*pages: write/);
 });
