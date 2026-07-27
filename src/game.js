@@ -1,15 +1,21 @@
 import {
+  BANANA_MAX_SURFACE_DISTANCE,
   BASE_GAME_SECONDS,
   bananasUntilBonus,
   calculateScore,
   extendBoost,
   formatScore,
+  getBananaSpawnDistance,
   getBonusMilestones,
   getBonusSeconds,
   getDeviceProfile,
+  getGorillaSpeedRange,
   getPlayableFrameDelta,
   getRemainingSeconds,
   getStage,
+  getStormInterval,
+  pickBananaBearing,
+  pickStormAngles,
 } from "./rules.js";
 
 let THREE;
@@ -50,7 +56,15 @@ const BOOST_MULTIPLIER = 1.52;
 const GORILLA_CHASE_SECONDS = 5;
 const GORILLA_CONTACT_DISTANCE = 1.12;
 const BANANA_CONTACT_DISTANCE = 1.05;
-const STORM_WARNING_SECONDS = 0.9;
+const STORM_WARNING_SECONDS = 1.7;
+// A banana already placed stays put until collected, but the player keeps
+// moving -- so without this, a banana placed in-band would simply be left
+// behind a few seconds later and never seen again. Once a banana drifts
+// past the band's outer edge relative to the player's *current* position,
+// it is relocated back into the band, keeping the annulus meaningful for
+// the whole run instead of just at spawn time. Comparing cosines avoids an
+// acos() call per banana per frame.
+const BANANA_LEASH_MIN_DOT = Math.cos(BANANA_MAX_SURFACE_DISTANCE / PLANET_RADIUS);
 const STORM_RAIN_SECONDS = 1.25;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const ZERO_VECTOR = new THREE.Vector3();
@@ -146,11 +160,14 @@ const ui = {
   controlTitle: document.querySelector("#control-title"),
   controlDetail: document.querySelector("#control-detail"),
   stormFlash: document.querySelector("#storm-flash"),
+  homeBestScore: document.querySelector("#home-best-score-value"),
   resultIcon: document.querySelector("#result-icon"),
   resultKicker: document.querySelector("#result-kicker"),
   resultTitle: document.querySelector("#result-title"),
   resultMessage: document.querySelector("#result-message"),
   resultScore: document.querySelector("#result-score"),
+  resultBestScore: document.querySelector("#result-best-score-value"),
+  resultNewRecord: document.querySelector("#result-new-record"),
   resultTime: document.querySelector("#result-time"),
   resultBananas: document.querySelector("#result-bananas"),
   resultBonus: document.querySelector("#result-bonus"),
@@ -537,28 +554,49 @@ class BananaField {
     this.right = new THREE.Vector3();
     this.back = new THREE.Vector3();
     this.forward = new THREE.Vector3(0, 0, -1);
+    this.tangent = new THREE.Vector3();
   }
 
-  reset(playerNormal) {
+  reset(playerNormal, playerFacing) {
     for (const item of this.items) {
       item.active = false;
       item.respawnAt = 0;
-      this.place(item, playerNormal);
+      this.place(item, playerNormal, playerFacing);
     }
     this.bananas.count = 0;
     this.tips.count = 0;
   }
 
-  randomNormal(target) {
-    const z = this.random.range(-1, 1);
-    const angle = this.random.range(0, Math.PI * 2);
-    const radius = Math.sqrt(Math.max(0, 1 - z * z));
-    return target.set(radius * Math.cos(angle), z, radius * Math.sin(angle));
+  // Places `target` at the given surface distance from `playerNormal`, at a
+  // bearing measured from `playerFacing` (0 = straight ahead of the
+  // player's actual movement direction). Distance is arc length (same units
+  // as PLANET_RADIUS), matching how storms/gorillas measure spawn distance.
+  placeAtSurfaceDistance(target, playerNormal, playerFacing, distance) {
+    this.right.crossVectors(playerFacing, playerNormal).normalize();
+    const bearing = pickBananaBearing(this.random);
+    this.tangent
+      .copy(playerFacing)
+      .multiplyScalar(Math.cos(bearing))
+      .addScaledVector(this.right, Math.sin(bearing));
+    const surfaceAngle = distance / PLANET_RADIUS;
+    target
+      .copy(playerNormal)
+      .multiplyScalar(Math.cos(surfaceAngle))
+      .addScaledVector(this.tangent, Math.sin(surfaceAngle))
+      .normalize();
   }
 
-  place(item, playerNormal) {
+  place(item, playerNormal, playerFacing) {
     for (let attempt = 0; attempt < 12; attempt += 1) {
-      this.randomNormal(item.normal);
+      // Bananas spawn within a reachable annulus of surface distance from
+      // the player, biased toward the direction the player is actually
+      // heading, rather than uniformly over the whole sphere -- near
+      // enough to be worth a detour, far enough to cost something.
+      const distance = getBananaSpawnDistance(this.random);
+      this.placeAtSurfaceDistance(item.normal, playerNormal, playerFacing, distance);
+      // Belt-and-suspenders: the band's minimum already keeps bananas off
+      // the player, but this guards against a degenerate (e.g. test-only)
+      // band configuration that could shrink to zero.
       if (item.normal.distanceToSquared(playerNormal) > 0.045) break;
     }
     item.spin = this.random.range(0, Math.PI * 2);
@@ -578,7 +616,7 @@ class BananaField {
     return false;
   }
 
-  update(time, targetCount, playerNormal) {
+  update(time, targetCount, playerNormal, playerFacing) {
     let bananaInstance = 0;
     let tipInstance = 0;
     const visibleTarget = Math.min(targetCount, this.items.length);
@@ -591,8 +629,13 @@ class BananaField {
         continue;
       }
       if (!item.active && time >= item.respawnAt) {
-        this.place(item, playerNormal);
+        this.place(item, playerNormal, playerFacing);
         item.active = true;
+      } else if (item.active && item.normal.dot(playerNormal) < BANANA_LEASH_MIN_DOT) {
+        // The player has moved on and left this banana behind (they never
+        // move once placed); pull it back into the reachable band around
+        // wherever the player is now instead of leaving it stranded.
+        this.place(item, playerNormal, playerFacing);
       }
       if (!item.active) continue;
 
@@ -1390,7 +1433,7 @@ class GorillaRainGame {
     this.initializeEffects();
 
     this.bananaField = new BananaField(this.scene3d, this.random);
-    this.bananaField.reset(this.playerNormal);
+    this.bananaField.reset(this.playerNormal, this.playerFacing);
     this.gorillaRenderer = new GorillaRenderer(
       this.scene3d,
       this.profile.maxGorillas,
@@ -1405,10 +1448,12 @@ class GorillaRainGame {
       () => this.mode === "playing",
     );
 
+    this.loadBestScore();
     this.bindUI();
     this.updateOptionButtons();
     this.updateControlCopy();
     this.resetGameState();
+    this.updateBestScoreDisplays();
     this.showScreen("home");
     this.onResize();
     window.__GORILLA_RAIN_READY__ = true;
@@ -2044,6 +2089,34 @@ class GorillaRainGame {
     ui.soundButton.textContent = this.sound.enabled ? "♪" : "×";
   }
 
+  loadBestScore() {
+    const stored = safeStorageGet("goriragouu-best-score", null);
+    const parsed = stored === null ? NaN : Number.parseInt(stored, 10);
+    this.hasBestScore = stored !== null && Number.isFinite(parsed);
+    this.bestScore = this.hasBestScore ? Math.max(0, parsed) : 0;
+  }
+
+  // Called after every finished run. Persists a new best when the just-
+  // finished score beats (or, on the very first-ever run, simply sets) the
+  // stored best, and reports whether this run set a new record.
+  registerScore(score) {
+    const previousBest = this.hasBestScore ? this.bestScore : -1;
+    const isNewRecord = score > previousBest;
+    if (isNewRecord) {
+      this.bestScore = score;
+      this.hasBestScore = true;
+      safeStorageSet("goriragouu-best-score", String(score));
+    }
+    this.updateBestScoreDisplays();
+    return isNewRecord;
+  }
+
+  updateBestScoreDisplays() {
+    const text = this.hasBestScore ? formatScore(this.bestScore) : "------";
+    if (ui.homeBestScore) ui.homeBestScore.textContent = text;
+    if (ui.resultBestScore) ui.resultBestScore.textContent = text;
+  }
+
   resetGameState() {
     this.gameElapsed = 0;
     this.bananaCount = 0;
@@ -2058,7 +2131,7 @@ class GorillaRainGame {
     this.viewForward.set(0, 0, -1);
     for (const gorilla of this.gorillaPool) gorilla.active = false;
     for (const storm of this.stormPool || []) storm.deactivate();
-    this.bananaField?.reset(this.playerNormal);
+    this.bananaField?.reset(this.playerNormal, this.playerFacing);
     this.updatePlayerTransform();
     this.updateCamera(1, true);
     this.gorillaRenderer?.update(this.gorillaPool, 0);
@@ -2235,6 +2308,7 @@ class GorillaRainGame {
       this.gameElapsed,
       this.currentStage.bananaTarget,
       this.playerNormal,
+      this.playerFacing,
     );
     if (
       this.bananaField.collect(
@@ -2257,9 +2331,13 @@ class GorillaRainGame {
 
     if (this.gameElapsed >= this.nextStormAt) {
       this.spawnStormWave(this.currentStage.stormLocations);
-      this.nextStormAt += this.profile.stormInterval;
+      // Storm cadence tightens as the run goes on (see getStormInterval),
+      // restoring late-game pressure now that placement is fair and the
+      // warning is readable.
+      const interval = getStormInterval(this.gameElapsed, this.profile.stormInterval);
+      this.nextStormAt += interval;
       if (this.nextStormAt <= this.gameElapsed) {
-        this.nextStormAt = this.gameElapsed + this.profile.stormInterval;
+        this.nextStormAt = this.gameElapsed + interval;
       }
     }
 
@@ -2368,15 +2446,17 @@ class GorillaRainGame {
   spawnStormWave(count) {
     const available = this.stormPool.filter((storm) => !storm.active);
     const actualCount = Math.min(count, available.length);
-    const baseAngle = this.random.range(0, Math.PI * 2);
-    const offsets =
-      actualCount === 1 ? [0] : actualCount === 2 ? [-0.78, 0.78] : [-1.34, 0, 1.34];
-    this.viewRight.crossVectors(this.viewForward, this.playerNormal).normalize();
+    // Angles are measured from the player's actual movement direction
+    // (playerFacing), not the camera's view forward, and pickStormAngles
+    // guarantees every one of them keeps clear of that heading -- so
+    // fleeing forward can never spawn a storm directly in the escape path.
+    const angles = pickStormAngles(actualCount, this.random);
+    this.viewRight.crossVectors(this.playerFacing, this.playerNormal).normalize();
 
     for (let index = 0; index < actualCount; index += 1) {
-      const angle = baseAngle + offsets[index] + this.random.range(-0.14, 0.14);
+      const angle = angles[index];
       this.tempA
-        .copy(this.viewForward)
+        .copy(this.playerFacing)
         .multiplyScalar(Math.cos(angle))
         .addScaledVector(this.viewRight, Math.sin(angle))
         .normalize();
@@ -2435,7 +2515,8 @@ class GorillaRainGame {
       gorilla.bornAt = this.gameElapsed;
       gorilla.dangerAt = this.gameElapsed + 0.38;
       gorilla.expiresAt = this.gameElapsed + GORILLA_CHASE_SECONDS;
-      gorilla.speed = this.random.range(4.5, 4.92);
+      const speedRange = getGorillaSpeedRange(this.gameElapsed);
+      gorilla.speed = this.random.range(speedRange.min, speedRange.max);
       gorilla.active = true;
       spawned += 1;
       if (spawned >= this.profile.gorillasPerStorm) break;
@@ -2558,6 +2639,7 @@ class GorillaRainGame {
         this.ambientTime,
         getStage(0).bananaTarget,
         this.playerNormal,
+        this.playerFacing,
       );
     } else if (this.mode === "result") {
       this.updateResultCamera(delta);
@@ -2565,6 +2647,7 @@ class GorillaRainGame {
         this.gameElapsed + this.ambientTime,
         this.currentStage.bananaTarget,
         this.playerNormal,
+        this.playerFacing,
       );
     } else {
       this.updateCamera(delta);
@@ -2642,6 +2725,9 @@ class GorillaRainGame {
     ui.resultBananas.textContent = String(this.bananaCount);
     ui.resultBonus.textContent = String(getBonusSeconds(this.bananaCount));
     ui.resultMode.textContent = `${this.profile.label}：1地点につきゴリラ${this.profile.gorillasPerStorm}体`;
+
+    const isNewRecord = this.registerScore(score);
+    if (ui.resultNewRecord) ui.resultNewRecord.hidden = !isNewRecord;
 
     if (cleared) {
       ui.resultIcon.textContent = "🌤️";

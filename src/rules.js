@@ -80,6 +80,120 @@ export function bananasUntilBonus(bananaCount) {
   return remainder === 0 ? 10 : 10 - remainder;
 }
 
+// Minimum angular clearance (radians) storms must keep from the player's
+// current heading so fleeing forward never runs the player straight into a
+// freshly spawned storm. ~0.7 rad (~40°) still lets storms wrap around the
+// sides and rear while leaving the forward cone open as an escape route.
+export const STORM_MIN_CLEARANCE = 0.7;
+// Small per-storm randomness applied after spreading storms across the
+// clear arc, so placement stays varied without ever violating clearance.
+export const STORM_ANGLE_JITTER = 0.12;
+
+// Pure helper: returns `count` angles (radians), each measured from the
+// player's heading (0 = straight ahead, +/-PI = directly behind), spread
+// across the arc that respects `minClearance` on both sides of the heading.
+// `random` must expose `.range(min, max)` (e.g. the game's SeededRandom),
+// which keeps this reproducible under a fixed seed.
+export function pickStormAngles(count, random, minClearance = STORM_MIN_CLEARANCE) {
+  const safeCount = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
+  if (safeCount <= 0 || !random || typeof random.range !== "function") return [];
+
+  const clearance = Number.isFinite(minClearance) ? Math.max(0, minClearance) : 0;
+  const usableSpan = Math.max(0.001, Math.PI * 2 - clearance * 2);
+  const baseOffset = random.range(0, usableSpan);
+  const angles = [];
+
+  for (let index = 0; index < safeCount; index += 1) {
+    const spread = safeCount > 1 ? (index / safeCount) * usableSpan : usableSpan / 2;
+    const jitter = random.range(-STORM_ANGLE_JITTER, STORM_ANGLE_JITTER);
+    let angle = clearance + ((baseOffset + spread + jitter) % usableSpan + usableSpan) % usableSpan;
+    // Re-clamp after jitter: the modulo keeps angle inside [clearance, clearance
+    // + usableSpan] = [clearance, 2*PI - clearance], but jitter right at either
+    // edge could nudge it a hair outside that inclusive range.
+    angle = Math.min(Math.max(angle, clearance), Math.PI * 2 - clearance);
+    angles.push(angle);
+  }
+
+  return angles;
+}
+
+// Bananas spawn in an annulus of surface distance from the player: near
+// enough that a detour is worthwhile, far enough that it costs something.
+// Distances are along the sphere's surface (same units as PLANET_RADIUS).
+// A banana already placed stays where it is until collected (or "leashed"
+// back into the band -- see BananaField in game.js), so this band also
+// controls how tight that leash is: tighter means more frequent, closer
+// re-rolls, which matters a lot given the tiny contact radius below.
+export const BANANA_MIN_SURFACE_DISTANCE = 7;
+export const BANANA_MAX_SURFACE_DISTANCE = 18;
+
+// Pure helper: returns a single random surface distance inside the band.
+// `random` must expose `.range(min, max)`, matching pickStormAngles above.
+export function getBananaSpawnDistance(
+  random,
+  minDistance = BANANA_MIN_SURFACE_DISTANCE,
+  maxDistance = BANANA_MAX_SURFACE_DISTANCE,
+) {
+  const safeMin = Number.isFinite(minDistance) ? Math.max(0, minDistance) : 0;
+  const safeMax =
+    Number.isFinite(maxDistance) && maxDistance > safeMin ? maxDistance : safeMin + 1;
+  if (!random || typeof random.range !== "function") return safeMin;
+  return random.range(safeMin, safeMax);
+}
+
+// A banana's contact radius is tiny next to the band above, so a bearing
+// drawn from the full circle almost never lines up with the player's
+// actual path. Bearing is instead drawn from a cone around the player's
+// current heading (0 = straight ahead) -- wide enough that reaching a
+// banana still takes a genuine, if modest, course correction, narrow
+// enough that a player who keeps roughly moving forward will cross paths
+// with several over the run.
+export const BANANA_BEARING_HALF_WIDTH = 0.55;
+
+export function pickBananaBearing(random, halfWidth = BANANA_BEARING_HALF_WIDTH) {
+  if (!random || typeof random.range !== "function") return 0;
+  const safeHalfWidth = Number.isFinite(halfWidth)
+    ? Math.max(0, Math.min(Math.PI, halfWidth))
+    : Math.PI;
+  return random.range(-safeHalfWidth, safeHalfWidth);
+}
+
+// Storm waves tighten as the run goes on so removing the two spawn-fairness
+// defects (fair placement + readable telegraph) doesn't leave the late game
+// toothless. Interval shrinks linearly from `baseInterval` down to
+// `baseInterval * STORM_INTERVAL_MIN_FACTOR` by `STORM_INTERVAL_RAMP_SECONDS`
+// elapsed, then holds there.
+export const STORM_INTERVAL_MIN_FACTOR = 0.55;
+export const STORM_INTERVAL_RAMP_SECONDS = 55;
+
+export function getStormInterval(elapsedSeconds, baseInterval) {
+  const safeBase = Number.isFinite(baseInterval) && baseInterval > 0 ? baseInterval : 1;
+  const safeElapsed = Number.isFinite(elapsedSeconds) ? Math.max(0, elapsedSeconds) : 0;
+  const progress = Math.min(1, safeElapsed / STORM_INTERVAL_RAMP_SECONDS);
+  const factor = 1 - progress * (1 - STORM_INTERVAL_MIN_FACTOR);
+  return safeBase * factor;
+}
+
+// Gorillas home in on the player rather than charging a fixed heading, so
+// even a small speed margin under PLAYER_SPEED matters: it is what makes a
+// brief, badly-timed turn survivable versus not. Speed range widens toward
+// the top end as the run goes on, adding late-game tension without ever
+// reaching (let alone exceeding) PLAYER_SPEED.
+export const GORILLA_SPEED_MIN_EARLY = 4.5;
+export const GORILLA_SPEED_MAX_EARLY = 4.92;
+export const GORILLA_SPEED_MIN_LATE = 4.75;
+export const GORILLA_SPEED_MAX_LATE = 5.08;
+export const GORILLA_SPEED_RAMP_SECONDS = 50;
+
+export function getGorillaSpeedRange(elapsedSeconds) {
+  const safeElapsed = Number.isFinite(elapsedSeconds) ? Math.max(0, elapsedSeconds) : 0;
+  const progress = Math.min(1, safeElapsed / GORILLA_SPEED_RAMP_SECONDS);
+  return {
+    min: GORILLA_SPEED_MIN_EARLY + (GORILLA_SPEED_MIN_LATE - GORILLA_SPEED_MIN_EARLY) * progress,
+    max: GORILLA_SPEED_MAX_EARLY + (GORILLA_SPEED_MAX_LATE - GORILLA_SPEED_MAX_EARLY) * progress,
+  };
+}
+
 export function getDeviceProfile(isMobile) {
   if (isMobile) {
     return Object.freeze({
