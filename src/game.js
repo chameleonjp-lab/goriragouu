@@ -65,6 +65,10 @@ const WATERLINE_ELEVATION = 1 - (PLANET_RADIUS - OCEAN_RADIUS) / TERRAIN_RELIEF;
 const SKY_ZENITH_COLOR = new THREE.Color(0x0c1a3d);
 const SKY_MID_COLOR = new THREE.Color(0x1f6f6c);
 const SKY_HORIZON_COLOR = new THREE.Color(0xf2d59c);
+// Fixed world-space sun direction for the sky dome only. This must NOT track
+// the player-following `this.sun` light (see updateCamera), or the glow disc
+// stays glued to the camera and washes the whole dome into one flat colour.
+const SUN_SKY_DIRECTION = new THREE.Vector3(12, 30, 18).normalize();
 
 const ui = {
   app: document.querySelector("#app"),
@@ -1115,7 +1119,7 @@ class GorillaRainGame {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 1.32;
     this.renderer.shadowMap.enabled = this.profile.realShadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.setAttribute("aria-hidden", "true");
@@ -1129,10 +1133,10 @@ class GorillaRainGame {
     this.camera = new THREE.PerspectiveCamera(IS_MOBILE ? 58 : 52, 1, 0.1, 200);
     this.baseFov = this.camera.fov;
 
-    const hemisphere = new THREE.HemisphereLight(0x3d6e86, 0x18332a, 1.5);
+    const hemisphere = new THREE.HemisphereLight(0x5688a0, 0x2a4a3a, 2.1);
     this.scene3d.add(hemisphere);
 
-    this.sun = new THREE.DirectionalLight(0xffd9a0, 1.75);
+    this.sun = new THREE.DirectionalLight(0xffd9a0, 2.3);
     this.sun.position.set(12, 30, 18);
     this.sun.castShadow = this.profile.realShadows;
     this.sun.shadow.mapSize.set(1024, 1024);
@@ -1147,7 +1151,7 @@ class GorillaRainGame {
     this.scene3d.add(this.sun, this.sun.target);
 
     if (!IS_MOBILE) {
-      this.fillLight = new THREE.DirectionalLight(0x5d7fa8, 0.5);
+      this.fillLight = new THREE.DirectionalLight(0x5d7fa8, 0.7);
       this.fillLight.position.set(-14, -6, -12);
       this.fillLight.target.position.set(0, PLANET_RADIUS, 0);
       this.scene3d.add(this.fillLight, this.fillLight.target);
@@ -1162,7 +1166,7 @@ class GorillaRainGame {
       depthWrite: false,
       uniforms: {
         uTime: { value: 0 },
-        uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
+        uSunDirection: { value: SUN_SKY_DIRECTION.clone() },
         uZenithColor: { value: SKY_ZENITH_COLOR.clone() },
         uMidColor: { value: SKY_MID_COLOR.clone() },
         uHorizonColor: { value: SKY_HORIZON_COLOR.clone() },
@@ -1193,10 +1197,10 @@ class GorillaRainGame {
             sin(viewDir.x * 30.0 + viewDir.z * 24.0 + uTime * 0.35) * 0.012 * (1.0 - height);
           sky += shimmer;
 
-          float sunDot = max(dot(viewDir, normalize(uSunDirection)), 0.0);
-          float sunGlow =
-            smoothstep(0.976, 0.998, sunDot) * 1.1 + smoothstep(0.86, 0.98, sunDot) * 0.28;
-          sky += sunGlow * vec3(1.0, 0.82, 0.52);
+          float sunDot = max(dot(viewDir, uSunDirection), 0.0);
+          float core = pow(sunDot, 28.0);
+          float halo = pow(sunDot, 5.0) * 0.18;
+          sky += (core * 0.85 + halo) * vec3(1.0, 0.82, 0.52);
 
           gl_FragColor = vec4(sky, 1.0);
         }
@@ -1211,12 +1215,14 @@ class GorillaRainGame {
 
   sampleTerrain(vertex) {
     const { x, y, z } = vertex;
-    const a = Math.sin(x * 2.1 + z * 1.7) * 0.5 + Math.cos(y * 2.6 - x * 1.3) * 0.5;
+    // Two broad, low-frequency octaves only: this keeps elevation spatially
+    // coherent so basins and shorelines read as continuous shapes rather than
+    // single isolated triangles flipping biome at random (a high-frequency
+    // third octave used to live here and produced exactly that speckle).
+    const a = Math.sin(x * 1.1 + z * 0.9) * 0.5 + Math.cos(y * 1.3 - x * 0.7) * 0.5;
     const b =
-      Math.sin(x * 4.6 - y * 3.8 + z * 2.3) * 0.5 + Math.cos(z * 5.2 + y * 1.9) * 0.5;
-    const c =
-      Math.sin(x * 9.7 + y * 8.3 - z * 6.5) * 0.5 + Math.cos(x * 7.4 - z * 10.1) * 0.5;
-    const raw = a * 0.55 + b * 0.3 + c * 0.15;
+      Math.sin(x * 2.2 - y * 1.8 + z * 1.4) * 0.5 + Math.cos(z * 2.5 + y * 1.1) * 0.5;
+    const raw = a * 0.7 + b * 0.3;
     const elevation = clamp(raw * 0.4 + 0.78, 0, 1);
     const biome =
       elevation < WATERLINE_ELEVATION
@@ -1247,7 +1253,7 @@ class GorillaRainGame {
       { at: 0, color: COLOR_MUD },
       { at: WATERLINE_ELEVATION - 0.04, color: COLOR_MUD },
       { at: WATERLINE_ELEVATION, color: COLOR_SAND },
-      { at: WATERLINE_ELEVATION + 0.03, color: COLOR_LAND_DARK },
+      { at: WATERLINE_ELEVATION + 0.05, color: COLOR_LAND_DARK },
       { at: 0.86, color: COLOR_LAND },
       { at: 1, color: COLOR_LAND_LIGHT },
     ];
@@ -1284,11 +1290,13 @@ class GorillaRainGame {
     this.ocean = new THREE.Mesh(
       new THREE.SphereGeometry(OCEAN_RADIUS, oceanSegments, oceanRings),
       new THREE.MeshStandardMaterial({
-        color: 0x1c7a82,
+        color: 0x1f7f7a,
+        emissive: 0x0c3a3c,
+        emissiveIntensity: 0.4,
         transparent: true,
         opacity: 0.72,
-        roughness: 0.25,
-        metalness: 0.1,
+        roughness: 0.65,
+        metalness: 0,
       }),
     );
     this.scene3d.add(this.ocean);
@@ -1333,6 +1341,10 @@ class GorillaRainGame {
     this.createDecorations();
     this.createStars();
     this.createAmbientClouds();
+  }
+
+  groundRadius(normal) {
+    return PLANET_RADIUS - (1 - this.sampleTerrain(normal).elevation) * TERRAIN_RELIEF;
   }
 
   pickLandNormal(target, poleThreshold) {
@@ -1398,8 +1410,12 @@ class GorillaRainGame {
       quaternion.setFromUnitVectors(Y_AXIS, normal);
       quaternion.multiply(spin.setFromAxisAngle(Y_AXIS, this.random.range(0, Math.PI * 2)));
       const size = this.random.range(0.72, 1.18);
+      // Trees must root on the displaced terrain surface, not the un-displaced
+      // PLANET_RADIUS, or they float above/clip into basins wherever the
+      // ground has been pushed inward.
+      const base = this.groundRadius(normal);
 
-      position.copy(normal).multiplyScalar(PLANET_RADIUS + 0.43 * size);
+      position.copy(normal).multiplyScalar(base + 0.43 * size);
       scale.set(size, size, size);
       matrix.compose(position, quaternion, scale);
       trunkMesh.setMatrixAt(index, matrix);
@@ -1407,14 +1423,14 @@ class GorillaRainGame {
       color.offsetHSL(0, 0, this.random.range(-0.05, 0.05));
       trunkMesh.setColorAt(index, color);
 
-      position.copy(normal).multiplyScalar(PLANET_RADIUS + 1.36 * size);
+      position.copy(normal).multiplyScalar(base + 1.36 * size);
       matrix.compose(position, quaternion, scale);
       crownMesh.setMatrixAt(index, matrix);
       color.setHex(crownHues[Math.floor(this.random.next() * crownHues.length)]);
       color.offsetHSL(0, 0, this.random.range(-0.06, 0.06));
       crownMesh.setColorAt(index, color);
 
-      position.copy(normal).multiplyScalar(PLANET_RADIUS + 2.05 * size);
+      position.copy(normal).multiplyScalar(base + 2.05 * size);
       scale.set(size * 0.62, size * 0.66, size * 0.62);
       matrix.compose(position, quaternion, scale);
       crownTopMesh.setMatrixAt(index, matrix);
@@ -1451,7 +1467,7 @@ class GorillaRainGame {
         this.tempQuaternion.setFromAxisAngle(Y_AXIS, this.random.range(0, Math.PI * 2)),
       );
       const size = this.random.range(0.45, 1.15);
-      position.copy(normal).multiplyScalar(PLANET_RADIUS + size * 0.2);
+      position.copy(normal).multiplyScalar(this.groundRadius(normal) + size * 0.2);
       scale.set(size, size * this.random.range(0.6, 1), size);
       matrix.compose(position, quaternion, scale);
       rocks.setMatrixAt(index, matrix);
@@ -2254,7 +2270,6 @@ class GorillaRainGame {
     this.ambientClouds.rotation.y += delta * 0.006;
 
     this.skyMaterial.uniforms.uTime.value = this.ambientTime;
-    this.skyMaterial.uniforms.uSunDirection.value.copy(this.sun.position).normalize();
     this.ocean.material.opacity = 0.68 + Math.sin(this.ambientTime * 0.5) * 0.05;
     this.ocean.rotation.y += delta * 0.01;
 
