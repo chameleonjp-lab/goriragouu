@@ -106,8 +106,9 @@ const ORBITAL_FALLER_HEIGHT_MAX = 15;
 // top out around 3.4 units), so a clear gap of open air always separates a
 // faller from the ground -- nothing ever reads as sitting on or embedded in
 // the surface, unlike the old near-zero cutoff that let large silhouettes
-// dip into hills.
-const ORBITAL_FALLER_LOW = 5;
+// dip into hills. Raised from 5 to keep a clear gap under the bigger bodies
+// (bodyScale now goes up to 6.5, versus the 4.2 this was originally tuned for).
+const ORBITAL_FALLER_LOW = 6;
 // During gameplay, fallers whose surface normal sits within this cone of the
 // player's own "up" are culled so the ambient rain never overlaps the
 // playfield or reads as a real threat -- only far-side/near-horizon fallers
@@ -120,6 +121,21 @@ const HOME_ORBIT_RADIUS = (PLANET_RADIUS * 17) / 9;
 const HOME_ORBIT_HEIGHT = PLANET_RADIUS;
 const HOME_ORBIT_BOB = PLANET_RADIUS / 6;
 const HOME_LOOKAT_HEIGHT = PLANET_RADIUS / 9;
+// The home/result orbit camera sits at a roughly fixed elevation angle above
+// the planet (only its azimuth changes as it slowly circles), so the patch
+// of sphere it can actually see is centred on this latitude, not spread
+// evenly over the whole globe. Uniform-random placement therefore wastes
+// most fallers on the far side or near the poles, where this camera never
+// looks, which is why the ambient rain read as sparse on portrait/mobile
+// framing where the visible cone beyond the limb is narrow. Biasing the
+// faller latitude toward this camera-derived value (rather than an
+// arbitrary tuned constant) keeps more of them somewhere a viewer can
+// actually see without hand-picking a "magic" band.
+const ORBITAL_FALLER_LATITUDE_BIAS = HOME_ORBIT_HEIGHT / Math.hypot(HOME_ORBIT_HEIGHT, HOME_ORBIT_RADIUS);
+// How far latitude is still allowed to spread away from that bias -- wide
+// enough that coverage still reads as "the whole globe is raining", not a
+// single ring, while shifting the odds toward the visible band.
+const ORBITAL_FALLER_LATITUDE_SPREAD = 0.55;
 const SKY_ZENITH_COLOR = new THREE.Color(0x0c1a3d);
 const SKY_MID_COLOR = new THREE.Color(0x1f6f6c);
 const SKY_HORIZON_COLOR = new THREE.Color(0xf2d59c);
@@ -1160,11 +1176,26 @@ class OrbitalRain {
     // actual brown/tan comes from per-part instanceColor below, matching
     // GorillaRenderer's real brown (0x3e2c28) / tan (0x8f6549) palette so the
     // fallers read as gorilla bodies, not black silhouettes.
+    //
+    // That alone is not enough, though: this.sun/this.fillLight are repointed
+    // every frame to shine locally "down" on wherever the player currently
+    // stands (see updateCamera), because that is what makes the player's own
+    // patch of terrain read correctly. A faller anywhere else on the globe --
+    // which is most of them, since this rain rings the whole sphere -- can
+    // sit well outside both directional lights' reach and fall back to
+    // hemisphere ambient alone, which a dark brown albedo still renders as
+    // near-black under ACES tonemapping. A modest emissive floor (tuned low
+    // enough that direct/hemisphere light still visibly brightens and shades
+    // the lit ones) guarantees every faller reads as a dim-but-visible brown
+    // body instead of a black speck, no matter where on the sphere it is or
+    // how far the player-anchored sun currently points.
     const bodyGeometry = new THREE.BoxGeometry(1, 1, 1);
     const bodyMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       roughness: 0.9,
       metalness: 0,
+      emissive: 0x35241b,
+      emissiveIntensity: 1.5,
     });
     const fallerInstanceCount = Math.max(1, fallerCount * this.partsPerFaller);
     this.fallers = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, fallerInstanceCount);
@@ -1194,10 +1225,14 @@ class OrbitalRain {
       this.phase[index] = random.range(0, 400);
       this.tumbleSeed[index] = random.range(0, Math.PI * 2);
       this.tumbleSpeed[index] = random.range(1.4, 3);
-      // Scaled way up from the original 0.75-1.25 -- at orbital camera
-      // distance a gorilla-proportioned box that size is a sub-pixel speck.
-      // This makes each faller read as a large tumbling body instead.
-      this.bodyScale[index] = random.range(2.8, 4.2);
+      // Scaled way up from the original 0.75-1.25 (and again from an
+      // intermediate 2.8-4.2) -- at orbital camera distance anything smaller
+      // reads as a speck, not a body. Fewer, larger, clearly-readable
+      // fallers beat a cloud of small ones, so the size increase here is
+      // paired with a lower ambientFallerCount in getDeviceProfile. Kept
+      // under ~6.5 (rather than pushing further) so two fallers on nearby
+      // orbits don't visually merge into one illegible dark mass.
+      this.bodyScale[index] = random.range(4.5, 6.5);
     }
 
     this.normal = new THREE.Vector3();
@@ -1292,7 +1327,19 @@ class OrbitalRain {
       const altitude = ORBITAL_FALLER_LOW + totalDistance * (1 - frac);
 
       const key = (index * 92821 + loopCount * 50261) | 0;
-      const y = orbitalHash(key) * 2 - 1;
+      // Latitude is biased toward where the home/result orbit camera actually
+      // looks (see ORBITAL_FALLER_LATITUDE_BIAS above) rather than sampled
+      // uniformly over the whole sphere; longitude stays fully uniform since
+      // that camera's azimuth keeps rotating, so every longitude eventually
+      // faces it.
+      const y = Math.max(
+        -1,
+        Math.min(
+          1,
+          ORBITAL_FALLER_LATITUDE_BIAS +
+            (orbitalHash(key) * 2 - 1) * ORBITAL_FALLER_LATITUDE_SPREAD,
+        ),
+      );
       const angle = orbitalHash(key + 12345) * Math.PI * 2;
       const radiusXZ = Math.sqrt(Math.max(0, 1 - y * y));
       this.normal.set(Math.cos(angle) * radiusXZ, y, Math.sin(angle) * radiusXZ);
