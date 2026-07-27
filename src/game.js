@@ -54,10 +54,17 @@ const STORM_WARNING_SECONDS = 0.9;
 const STORM_RAIN_SECONDS = 1.25;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const ZERO_VECTOR = new THREE.Vector3();
-const COLOR_LAND_LIGHT = new THREE.Color(0x75a843);
-const COLOR_LAND = new THREE.Color(0x39743c);
-const COLOR_LAND_DARK = new THREE.Color(0x214e35);
-const COLOR_SAND = new THREE.Color(0xc8ab63);
+const COLOR_LAND_LIGHT = new THREE.Color(0x8fcf5c);
+const COLOR_LAND = new THREE.Color(0x3f7a41);
+const COLOR_LAND_DARK = new THREE.Color(0x1f4a32);
+const COLOR_SAND = new THREE.Color(0xdcc17c);
+const COLOR_MUD = new THREE.Color(0x6d5334);
+const TERRAIN_RELIEF = 0.62;
+const OCEAN_RADIUS = PLANET_RADIUS - 0.2;
+const WATERLINE_ELEVATION = 1 - (PLANET_RADIUS - OCEAN_RADIUS) / TERRAIN_RELIEF;
+const SKY_ZENITH_COLOR = new THREE.Color(0x0c1a3d);
+const SKY_MID_COLOR = new THREE.Color(0x1f6f6c);
+const SKY_HORIZON_COLOR = new THREE.Color(0xf2d59c);
 
 const ui = {
   app: document.querySelector("#app"),
@@ -1117,30 +1124,134 @@ class GorillaRainGame {
 
   initializeScene() {
     this.scene3d = new THREE.Scene();
-    this.scene3d.background = new THREE.Color(0x0b343a);
-    this.scene3d.fog = new THREE.FogExp2(0x0b343a, 0.0115);
-    this.camera = new THREE.PerspectiveCamera(IS_MOBILE ? 58 : 52, 1, 0.1, 130);
+    this.scene3d.background = null;
+    this.scene3d.fog = new THREE.FogExp2(SKY_HORIZON_COLOR.getHex(), 0.0085);
+    this.camera = new THREE.PerspectiveCamera(IS_MOBILE ? 58 : 52, 1, 0.1, 200);
     this.baseFov = this.camera.fov;
 
-    const hemisphere = new THREE.HemisphereLight(0xbff4ee, 0x183323, 2.4);
+    const hemisphere = new THREE.HemisphereLight(0x3d6e86, 0x18332a, 1.5);
     this.scene3d.add(hemisphere);
 
-    this.sun = new THREE.DirectionalLight(0xffe7b0, 2.25);
+    this.sun = new THREE.DirectionalLight(0xffd9a0, 1.75);
     this.sun.position.set(12, 30, 18);
     this.sun.castShadow = this.profile.realShadows;
     this.sun.shadow.mapSize.set(1024, 1024);
-    this.sun.shadow.camera.left = -13;
-    this.sun.shadow.camera.right = 13;
-    this.sun.shadow.camera.top = 13;
-    this.sun.shadow.camera.bottom = -13;
+    this.sun.shadow.camera.left = -15;
+    this.sun.shadow.camera.right = 15;
+    this.sun.shadow.camera.top = 15;
+    this.sun.shadow.camera.bottom = -15;
     this.sun.shadow.camera.near = 1;
-    this.sun.shadow.camera.far = 48;
+    this.sun.shadow.camera.far = 52;
     this.sun.shadow.bias = -0.00045;
     this.sun.target.position.set(0, PLANET_RADIUS, 0);
     this.scene3d.add(this.sun, this.sun.target);
+
+    if (!IS_MOBILE) {
+      this.fillLight = new THREE.DirectionalLight(0x5d7fa8, 0.5);
+      this.fillLight.position.set(-14, -6, -12);
+      this.fillLight.target.position.set(0, PLANET_RADIUS, 0);
+      this.scene3d.add(this.fillLight, this.fillLight.target);
+    }
+
+    this.createSkyDome();
+  }
+
+  createSkyDome() {
+    const skyMaterial = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      uniforms: {
+        uTime: { value: 0 },
+        uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
+        uZenithColor: { value: SKY_ZENITH_COLOR.clone() },
+        uMidColor: { value: SKY_MID_COLOR.clone() },
+        uHorizonColor: { value: SKY_HORIZON_COLOR.clone() },
+      },
+      vertexShader: `
+        varying vec3 vWorldPosition;
+        void main() {
+          vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+          vWorldPosition = worldPosition.xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform vec3 uSunDirection;
+        uniform vec3 uZenithColor;
+        uniform vec3 uMidColor;
+        uniform vec3 uHorizonColor;
+        varying vec3 vWorldPosition;
+
+        void main() {
+          vec3 viewDir = normalize(vWorldPosition);
+          float height = clamp(viewDir.y * 0.5 + 0.5, 0.0, 1.0);
+          vec3 sky = mix(uHorizonColor, uMidColor, smoothstep(0.05, 0.42, height));
+          sky = mix(sky, uZenithColor, smoothstep(0.32, 0.95, height));
+
+          float shimmer =
+            sin(viewDir.x * 30.0 + viewDir.z * 24.0 + uTime * 0.35) * 0.012 * (1.0 - height);
+          sky += shimmer;
+
+          float sunDot = max(dot(viewDir, normalize(uSunDirection)), 0.0);
+          float sunGlow =
+            smoothstep(0.976, 0.998, sunDot) * 1.1 + smoothstep(0.86, 0.98, sunDot) * 0.28;
+          sky += sunGlow * vec3(1.0, 0.82, 0.52);
+
+          gl_FragColor = vec4(sky, 1.0);
+        }
+      `,
+    });
+    this.skyMaterial = skyMaterial;
+    this.sky = new THREE.Mesh(new THREE.SphereGeometry(120, 32, 20), skyMaterial);
+    this.sky.renderOrder = -1;
+    this.sky.frustumCulled = false;
+    this.scene3d.add(this.sky);
+  }
+
+  sampleTerrain(vertex) {
+    const { x, y, z } = vertex;
+    const a = Math.sin(x * 2.1 + z * 1.7) * 0.5 + Math.cos(y * 2.6 - x * 1.3) * 0.5;
+    const b =
+      Math.sin(x * 4.6 - y * 3.8 + z * 2.3) * 0.5 + Math.cos(z * 5.2 + y * 1.9) * 0.5;
+    const c =
+      Math.sin(x * 9.7 + y * 8.3 - z * 6.5) * 0.5 + Math.cos(x * 7.4 - z * 10.1) * 0.5;
+    const raw = a * 0.55 + b * 0.3 + c * 0.15;
+    const elevation = clamp(raw * 0.4 + 0.78, 0, 1);
+    const biome =
+      elevation < WATERLINE_ELEVATION
+        ? "water"
+        : elevation < WATERLINE_ELEVATION + 0.05
+          ? "sand"
+          : "land";
+    return { elevation, biome };
+  }
+
+  terrainColor(elevation, vertex, target) {
+    const stops = this.terrainStops;
+    let index = 0;
+    while (index < stops.length - 2 && elevation > stops[index + 1].at) index += 1;
+    const lower = stops[index];
+    const upper = stops[index + 1];
+    const span = upper.at - lower.at;
+    const t = span > 0.0001 ? clamp((elevation - lower.at) / span, 0, 1) : 0;
+    target.lerpColors(lower.color, upper.color, t);
+    const jitter =
+      Math.sin(vertex.x * 53.7 + vertex.y * 19.1) * Math.cos(vertex.z * 41.3 + vertex.x * 11.7);
+    target.offsetHSL(jitter * 0.01, 0, jitter * 0.035);
+    return target;
   }
 
   initializeWorld() {
+    this.terrainStops = [
+      { at: 0, color: COLOR_MUD },
+      { at: WATERLINE_ELEVATION - 0.04, color: COLOR_MUD },
+      { at: WATERLINE_ELEVATION, color: COLOR_SAND },
+      { at: WATERLINE_ELEVATION + 0.03, color: COLOR_LAND_DARK },
+      { at: 0.86, color: COLOR_LAND },
+      { at: 1, color: COLOR_LAND_LIGHT },
+    ];
+
     const detail = IS_MOBILE ? 4 : 5;
     const landGeometry = new THREE.IcosahedronGeometry(PLANET_RADIUS, detail);
     const positions = landGeometry.getAttribute("position");
@@ -1150,59 +1261,98 @@ class GorillaRainGame {
 
     for (let index = 0; index < positions.count; index += 1) {
       vertex.fromBufferAttribute(positions, index).normalize();
-      const noise =
-        Math.sin(vertex.x * 12.3 + vertex.z * 4.1) * 0.42 +
-        Math.sin(vertex.y * 17.7 - vertex.x * 3.4) * 0.28 +
-        Math.cos(vertex.z * 21.1 + vertex.y * 5.7) * 0.22;
-      if (noise < -0.56) {
-        color.copy(COLOR_SAND);
-      } else if (noise > 0.5) {
-        color.copy(COLOR_LAND_LIGHT);
-      } else if (noise < -0.1) {
-        color.copy(COLOR_LAND_DARK);
-      } else {
-        color.copy(COLOR_LAND);
-      }
+      const { elevation } = this.sampleTerrain(vertex);
+      const radius = PLANET_RADIUS - (1 - elevation) * TERRAIN_RELIEF;
+      positions.setXYZ(index, vertex.x * radius, vertex.y * radius, vertex.z * radius);
+      this.terrainColor(elevation, vertex, color);
       colors.push(color.r, color.g, color.b);
     }
     landGeometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    landGeometry.computeVertexNormals();
 
     const landMaterial = new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.94,
       metalness: 0,
-      flatShading: true,
     });
     this.land = new THREE.Mesh(landGeometry, landMaterial);
     this.land.receiveShadow = this.profile.realShadows;
     this.scene3d.add(this.land);
 
-    const atmosphere = new THREE.Mesh(
-      new THREE.SphereGeometry(PLANET_RADIUS + 0.38, 32, 24),
-      new THREE.MeshBasicMaterial({
-        color: 0x8ce9d7,
+    const oceanSegments = IS_MOBILE ? 32 : 48;
+    const oceanRings = IS_MOBILE ? 20 : 32;
+    this.ocean = new THREE.Mesh(
+      new THREE.SphereGeometry(OCEAN_RADIUS, oceanSegments, oceanRings),
+      new THREE.MeshStandardMaterial({
+        color: 0x1c7a82,
         transparent: true,
-        opacity: 0.06,
-        side: THREE.BackSide,
-        depthWrite: false,
+        opacity: 0.72,
+        roughness: 0.25,
+        metalness: 0.1,
       }),
     );
-    this.scene3d.add(atmosphere);
+    this.scene3d.add(this.ocean);
+
+    const rim = new THREE.Mesh(
+      new THREE.SphereGeometry(PLANET_RADIUS + 0.55, 32, 24),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        uniforms: {
+          uColor: { value: new THREE.Color(0x7fe4d8) },
+          uPower: { value: 2.4 },
+        },
+        vertexShader: `
+          varying vec3 vNormal;
+          varying vec3 vViewPosition;
+          void main() {
+            vNormal = normalize(normalMatrix * normal);
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            vViewPosition = -mvPosition.xyz;
+            gl_Position = projectionMatrix * mvPosition;
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 uColor;
+          uniform float uPower;
+          varying vec3 vNormal;
+          varying vec3 vViewPosition;
+          void main() {
+            vec3 viewDir = normalize(vViewPosition);
+            float rim = 1.0 - abs(dot(viewDir, normalize(vNormal)));
+            float intensity = pow(clamp(rim, 0.0, 1.0), uPower);
+            gl_FragColor = vec4(uColor, intensity);
+          }
+        `,
+      }),
+    );
+    this.scene3d.add(rim);
 
     this.createDecorations();
     this.createStars();
     this.createAmbientClouds();
   }
 
+  pickLandNormal(target, poleThreshold) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      this.randomUnitNormal(target);
+      if (target.dot(Y_AXIS) > poleThreshold) target.negate();
+      if (this.sampleTerrain(target).elevation > WATERLINE_ELEVATION + 0.02) break;
+    }
+    return target;
+  }
+
   createDecorations() {
     const trunkGeometry = new THREE.CylinderGeometry(0.14, 0.2, 0.9, 5);
     const crownGeometry = new THREE.ConeGeometry(0.58, 1.45, 6);
     const trunkMaterial = new THREE.MeshStandardMaterial({
-      color: 0x674528,
+      color: 0xffffff,
       roughness: 0.96,
     });
     const crownMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1b633b,
+      color: 0xffffff,
       roughness: 0.94,
     });
     const trunkMesh = new THREE.InstancedMesh(
@@ -1215,33 +1365,72 @@ class GorillaRainGame {
       crownMaterial,
       this.profile.treeCount,
     );
+    const crownTopMesh = new THREE.InstancedMesh(
+      crownGeometry,
+      crownMaterial,
+      this.profile.treeCount,
+    );
+    trunkMesh.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(this.profile.treeCount * 3),
+      3,
+    );
+    crownMesh.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(this.profile.treeCount * 3),
+      3,
+    );
+    crownTopMesh.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(this.profile.treeCount * 3),
+      3,
+    );
+
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
+    const spin = new THREE.Quaternion();
     const normal = new THREE.Vector3();
     const position = new THREE.Vector3();
     const scale = new THREE.Vector3();
+    const color = new THREE.Color();
+    const trunkHues = [0x6b4a29, 0x7a5730, 0x5a4025, 0x674a2d];
+    const crownHues = [0x2f7d3e, 0x1f6a35, 0x3f8f4a, 0x256b4f];
 
     for (let index = 0; index < this.profile.treeCount; index += 1) {
-      this.randomUnitNormal(normal);
-      if (normal.dot(Y_AXIS) > 0.91) normal.negate();
+      this.pickLandNormal(normal, 0.91);
       quaternion.setFromUnitVectors(Y_AXIS, normal);
+      quaternion.multiply(spin.setFromAxisAngle(Y_AXIS, this.random.range(0, Math.PI * 2)));
       const size = this.random.range(0.72, 1.18);
+
       position.copy(normal).multiplyScalar(PLANET_RADIUS + 0.43 * size);
       scale.set(size, size, size);
       matrix.compose(position, quaternion, scale);
       trunkMesh.setMatrixAt(index, matrix);
+      color.setHex(trunkHues[Math.floor(this.random.next() * trunkHues.length)]);
+      color.offsetHSL(0, 0, this.random.range(-0.05, 0.05));
+      trunkMesh.setColorAt(index, color);
 
       position.copy(normal).multiplyScalar(PLANET_RADIUS + 1.36 * size);
       matrix.compose(position, quaternion, scale);
       crownMesh.setMatrixAt(index, matrix);
+      color.setHex(crownHues[Math.floor(this.random.next() * crownHues.length)]);
+      color.offsetHSL(0, 0, this.random.range(-0.06, 0.06));
+      crownMesh.setColorAt(index, color);
+
+      position.copy(normal).multiplyScalar(PLANET_RADIUS + 2.05 * size);
+      scale.set(size * 0.62, size * 0.66, size * 0.62);
+      matrix.compose(position, quaternion, scale);
+      crownTopMesh.setMatrixAt(index, matrix);
+      crownTopMesh.setColorAt(index, color);
     }
     trunkMesh.instanceMatrix.needsUpdate = true;
     crownMesh.instanceMatrix.needsUpdate = true;
-    this.scene3d.add(trunkMesh, crownMesh);
+    crownTopMesh.instanceMatrix.needsUpdate = true;
+    trunkMesh.instanceColor.needsUpdate = true;
+    crownMesh.instanceColor.needsUpdate = true;
+    crownTopMesh.instanceColor.needsUpdate = true;
+    this.scene3d.add(trunkMesh, crownMesh, crownTopMesh);
 
     const rockGeometry = new THREE.DodecahedronGeometry(0.52, 0);
     const rockMaterial = new THREE.MeshStandardMaterial({
-      color: 0x62706a,
+      color: 0xffffff,
       roughness: 0.98,
       flatShading: true,
     });
@@ -1250,9 +1439,13 @@ class GorillaRainGame {
       rockMaterial,
       this.profile.rockCount,
     );
+    rocks.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(this.profile.rockCount * 3),
+      3,
+    );
+    const rockHues = [0x6a746d, 0x5c5650, 0x71614f, 0x808a82];
     for (let index = 0; index < this.profile.rockCount; index += 1) {
-      this.randomUnitNormal(normal);
-      if (normal.dot(Y_AXIS) > 0.94) normal.negate();
+      this.pickLandNormal(normal, 0.94);
       quaternion.setFromUnitVectors(Y_AXIS, normal);
       quaternion.multiply(
         this.tempQuaternion.setFromAxisAngle(Y_AXIS, this.random.range(0, Math.PI * 2)),
@@ -1262,18 +1455,21 @@ class GorillaRainGame {
       scale.set(size, size * this.random.range(0.6, 1), size);
       matrix.compose(position, quaternion, scale);
       rocks.setMatrixAt(index, matrix);
+      color.setHex(rockHues[Math.floor(this.random.next() * rockHues.length)]);
+      color.offsetHSL(0, 0, this.random.range(-0.05, 0.05));
+      rocks.setColorAt(index, color);
     }
     rocks.instanceMatrix.needsUpdate = true;
+    rocks.instanceColor.needsUpdate = true;
     this.scene3d.add(rocks);
   }
 
-  createStars() {
-    const count = IS_MOBILE ? 170 : 290;
+  buildStarLayer(count, minRadius, maxRadius) {
     const positions = new Float32Array(count * 3);
     const normal = new THREE.Vector3();
     for (let index = 0; index < count; index += 1) {
       this.randomUnitNormal(normal);
-      const radius = this.random.range(64, 104);
+      const radius = this.random.range(minRadius, maxRadius);
       const offset = index * 3;
       positions[offset] = normal.x * radius;
       positions[offset + 1] = normal.y * radius;
@@ -1281,14 +1477,36 @@ class GorillaRainGame {
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.PointsMaterial({
-      color: 0xc9f5ec,
-      size: IS_MOBILE ? 0.16 : 0.2,
-      transparent: true,
-      opacity: 0.48,
-      depthWrite: false,
-    });
-    this.stars = new THREE.Points(geometry, material);
+    return geometry;
+  }
+
+  createStars() {
+    const dimCount = IS_MOBILE ? 150 : 250;
+    const brightCount = IS_MOBILE ? 20 : 40;
+
+    const dimStars = new THREE.Points(
+      this.buildStarLayer(dimCount, 64, 104),
+      new THREE.PointsMaterial({
+        color: 0xbfeee7,
+        size: IS_MOBILE ? 0.14 : 0.17,
+        transparent: true,
+        opacity: 0.6,
+        depthWrite: false,
+      }),
+    );
+    const brightStars = new THREE.Points(
+      this.buildStarLayer(brightCount, 70, 108),
+      new THREE.PointsMaterial({
+        color: 0xffffff,
+        size: IS_MOBILE ? 0.32 : 0.42,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+      }),
+    );
+
+    this.stars = new THREE.Group();
+    this.stars.add(dimStars, brightStars);
     this.scene3d.add(this.stars);
   }
 
@@ -1296,24 +1514,24 @@ class GorillaRainGame {
     this.ambientClouds = new THREE.Group();
     const geometry = new THREE.IcosahedronGeometry(1.15, 1);
     const material = new THREE.MeshLambertMaterial({
-      color: 0xb9d5d2,
+      color: 0xf6e6c8,
       transparent: true,
-      opacity: 0.23,
+      opacity: 0.32,
       depthWrite: false,
     });
     for (let index = 0; index < (IS_MOBILE ? 9 : 14); index += 1) {
       const cloud = new THREE.Group();
       const normal = new THREE.Vector3();
       this.randomUnitNormal(normal);
-      cloud.position.copy(normal).multiplyScalar(this.random.range(28, 38));
+      cloud.position.copy(normal).multiplyScalar(this.random.range(42, 58));
       cloud.quaternion.setFromUnitVectors(Y_AXIS, normal);
       for (let puffIndex = 0; puffIndex < 3; puffIndex += 1) {
         const puff = new THREE.Mesh(geometry, material);
-        puff.position.set((puffIndex - 1) * 1.4, this.random.range(-0.2, 0.35), 0);
+        puff.position.set((puffIndex - 1) * 1.5, this.random.range(-0.25, 0.4), 0);
         puff.scale.set(
-          this.random.range(0.8, 1.3),
-          this.random.range(0.55, 0.85),
-          this.random.range(0.65, 1),
+          this.random.range(0.7, 1.6),
+          this.random.range(0.45, 1),
+          this.random.range(0.55, 1.15),
         );
         cloud.add(puff);
       }
@@ -1964,6 +2182,17 @@ class GorillaRainGame {
       .copy(this.playerNormal)
       .multiplyScalar(PLANET_RADIUS + 1);
     this.sun.target.updateMatrixWorld();
+
+    if (this.fillLight) {
+      this.fillLight.position
+        .copy(this.playerNormal)
+        .multiplyScalar(PLANET_RADIUS + 14)
+        .addScaledVector(this.viewRight, -12);
+      this.fillLight.target.position
+        .copy(this.playerNormal)
+        .multiplyScalar(PLANET_RADIUS + 1);
+      this.fillLight.target.updateMatrixWorld();
+    }
   }
 
   updateHomeCamera(delta) {
@@ -2023,6 +2252,11 @@ class GorillaRainGame {
     this.updatePlayerAnimation();
     this.gorillaRenderer.update(this.gorillaPool, this.gameElapsed);
     this.ambientClouds.rotation.y += delta * 0.006;
+
+    this.skyMaterial.uniforms.uTime.value = this.ambientTime;
+    this.skyMaterial.uniforms.uSunDirection.value.copy(this.sun.position).normalize();
+    this.ocean.material.opacity = 0.68 + Math.sin(this.ambientTime * 0.5) * 0.05;
+    this.ocean.rotation.y += delta * 0.01;
 
     const boosted = this.mode === "playing" && this.gameElapsed < this.boostUntil;
     ui.app.classList.toggle("is-boosting", boosted && this.motionEnabled);
