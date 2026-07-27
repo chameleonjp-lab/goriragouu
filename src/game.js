@@ -2,6 +2,8 @@ import {
   BANANA_MAX_SURFACE_DISTANCE,
   BANANA_RESPAWN_DELAY_SECONDS,
   BASE_GAME_SECONDS,
+  BOOST_MULTIPLIER,
+  PLAYER_SPEED,
   bananasUntilBonus,
   calculateScore,
   extendBoost,
@@ -52,12 +54,17 @@ const IS_MOBILE =
 const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
 const PLANET_RADIUS = 30;
 const PLAYER_HEIGHT = 0.05;
-const PLAYER_SPEED = 5.2;
-const BOOST_MULTIPLIER = 1.52;
 const GORILLA_CHASE_SECONDS = 5;
 const GORILLA_CONTACT_DISTANCE = 1.12;
 const BANANA_CONTACT_DISTANCE = 1.05;
-const STORM_WARNING_SECONDS = 1.7;
+// Time from a storm's spawn to when its rain (and the gorilla swarm at
+// impact) begins, i.e. the player's window to notice the warning ring/cloud
+// and steer clear. Raised alongside shrinking STORM_MIN_CLEARANCE (see
+// rules.js) so storms that now appear near dead-ahead still leave enough
+// reaction time to turn away before the swarm lands -- fairness moves from
+// "never appears in front of you" to "you always have time to see it and
+// react."
+const STORM_WARNING_SECONDS = 2.2;
 // A banana already placed stays put until collected, but the player keeps
 // moving -- so without this, a banana placed in-band would simply be left
 // behind a few seconds later and never seen again. Once a banana drifts

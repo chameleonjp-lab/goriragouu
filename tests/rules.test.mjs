@@ -7,6 +7,9 @@ import {
   BANANA_MAX_SURFACE_DISTANCE,
   BANANA_MIN_SURFACE_DISTANCE,
   BASE_GAME_SECONDS,
+  BOOST_MULTIPLIER,
+  GORILLA_SPEED_MAX_EARLY,
+  PLAYER_SPEED,
   STORM_INTERVAL_MIN_FACTOR,
   STORM_MIN_CLEARANCE,
   bananasUntilBonus,
@@ -153,14 +156,30 @@ test("バナナの方位は進行方向を中心とした扇の範囲に収ま�
   }
 });
 
-test("ゴリラの速度は経過とともに上がるが、プレイヤーの速度は超えない", () => {
-  const PLAYER_SPEED = 5.2;
+test("ゴリラの速度は経過とともに上がり、序盤はプレイヤー未満・終盤は上回る", () => {
   const early = getGorillaSpeedRange(0);
   const late = getGorillaSpeedRange(999);
+  // Opening stays forgiving: even the fastest early gorilla can't catch an
+  // unboosted player who just keeps moving.
   assert.ok(early.max < PLAYER_SPEED);
-  assert.ok(late.max < PLAYER_SPEED);
+  assert.equal(early.max, GORILLA_SPEED_MAX_EARLY);
   assert.ok(late.max > early.max);
   assert.ok(late.min >= early.min);
+});
+
+test("終盤のゴリラは無加速のプレイヤーより速いが、加速中のプレイヤーには届かない", () => {
+  // This is the core rebalance: reaction time + resource management replace
+  // "the enemy can never be fast enough" as the game's fairness basis. Late
+  // gorillas must genuinely outrun an unboosted player (so ignoring bananas
+  // is punished) while staying comfortably below boosted speed (so a player
+  // who banks and uses boost always escapes with margin).
+  const boostedSpeed = PLAYER_SPEED * BOOST_MULTIPLIER;
+  const late = getGorillaSpeedRange(999);
+  assert.ok(late.min > PLAYER_SPEED, "late-game gorillas must outrun an unboosted player");
+  assert.ok(
+    late.max < boostedSpeed * 0.9,
+    "late-game gorillas must stay comfortably below boosted player speed",
+  );
 });
 
 test("低フレームでもゲーム時計は実時間で60秒進む", () => {

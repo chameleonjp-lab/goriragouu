@@ -4,6 +4,14 @@ export const BOOST_SECONDS_PER_BANANA = 2;
 export const SCORE_PER_SECOND = 100;
 export const SCORE_PER_BANANA = 100;
 
+// Player movement, mirrored 1:1 into game.js (which imports these rather than
+// redefining them) so the balance invariant below has a single source of
+// truth: unboosted PLAYER_SPEED is what late-game gorillas must exceed, and
+// PLAYER_SPEED * BOOST_MULTIPLIER (~7.9) is the hard ceiling gorilla speed
+// must always stay comfortably under.
+export const PLAYER_SPEED = 5.2;
+export const BOOST_MULTIPLIER = 1.52;
+
 export const STAGES = Object.freeze([
   Object.freeze({
     index: 0,
@@ -81,10 +89,17 @@ export function bananasUntilBonus(bananaCount) {
 }
 
 // Minimum angular clearance (radians) storms must keep from the player's
-// current heading so fleeing forward never runs the player straight into a
-// freshly spawned storm. ~0.7 rad (~40°) still lets storms wrap around the
-// sides and rear while leaving the forward cone open as an escape route.
-export const STORM_MIN_CLEARANCE = 0.7;
+// current heading. This used to be wide enough (~0.7 rad / 40°) that a
+// storm could never appear anywhere near the forward cone at all, which
+// made holding a straight heading a permanent safe lane -- nothing could
+// ever spawn in front of a player who simply kept running forward. That is
+// too strong a guarantee: fairness should come from having time to react,
+// not from a forbidden zone. ~0.3 rad (~17°) still guarantees a storm can
+// never spawn so close to dead-ahead that a reacting player has no room to
+// turn clear of it, while allowing storms to appear almost anywhere in the
+// player's path -- see STORM_WARNING_SECONDS in game.js for the reaction
+// window this trades on.
+export const STORM_MIN_CLEARANCE = 0.3;
 // Small per-storm randomness applied after spreading storms across the
 // clear arc, so placement stays varied without ever violating clearance.
 export const STORM_ANGLE_JITTER = 0.12;
@@ -182,16 +197,21 @@ export function getStormInterval(elapsedSeconds, baseInterval) {
   return safeBase * factor;
 }
 
-// Gorillas home in on the player rather than charging a fixed heading, so
-// even a small speed margin under PLAYER_SPEED matters: it is what makes a
-// brief, badly-timed turn survivable versus not. Speed range widens toward
-// the top end as the run goes on, adding late-game tension without ever
-// reaching (let alone exceeding) PLAYER_SPEED.
+// Gorillas home in on the player rather than charging a fixed heading. Early
+// on they stay under PLAYER_SPEED so the opening is forgiving and readable
+// even with no boost banked yet. As the run goes on the range ramps past
+// PLAYER_SPEED (5.2) -- late-game gorillas are genuinely faster than an
+// unboosted player, so standing still on "just keep running" loses ground
+// and boost stops being optional. The late ceiling is kept comfortably
+// below the boosted speed (PLAYER_SPEED * BOOST_MULTIPLIER =~ 7.9, see
+// above) so a player who banks and uses boost always escapes with margin.
+// This is the core rebalance: reaction time + resource management replace
+// "the enemy can never be fast enough to catch you" as the fairness basis.
 export const GORILLA_SPEED_MIN_EARLY = 4.5;
 export const GORILLA_SPEED_MAX_EARLY = 4.92;
-export const GORILLA_SPEED_MIN_LATE = 4.9;
-export const GORILLA_SPEED_MAX_LATE = 5.16;
-export const GORILLA_SPEED_RAMP_SECONDS = 40;
+export const GORILLA_SPEED_MIN_LATE = 5.6;
+export const GORILLA_SPEED_MAX_LATE = 6.55;
+export const GORILLA_SPEED_RAMP_SECONDS = 52;
 
 export function getGorillaSpeedRange(elapsedSeconds) {
   const safeElapsed = Number.isFinite(elapsedSeconds) ? Math.max(0, elapsedSeconds) : 0;
