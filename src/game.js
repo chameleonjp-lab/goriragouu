@@ -1,15 +1,24 @@
 import {
+  BANANA_MAX_SURFACE_DISTANCE,
+  BANANA_RESPAWN_DELAY_SECONDS,
   BASE_GAME_SECONDS,
+  BOOST_MULTIPLIER,
+  PLAYER_SPEED,
   bananasUntilBonus,
   calculateScore,
   extendBoost,
   formatScore,
+  getBananaSpawnDistance,
   getBonusMilestones,
   getBonusSeconds,
   getDeviceProfile,
+  getGorillaSpeedRange,
   getPlayableFrameDelta,
   getRemainingSeconds,
   getStage,
+  getStormInterval,
+  pickBananaBearing,
+  pickStormAngles,
 } from "./rules.js";
 
 let THREE;
@@ -43,28 +52,85 @@ const IS_MOBILE =
   FORCED_DEVICE === "sp" ||
   (FORCED_DEVICE !== "pc" && IS_COARSE_POINTER && !HAS_FINE_POINTER);
 const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
-const PLANET_RADIUS = 18;
+const PLANET_RADIUS = 30;
 const PLAYER_HEIGHT = 0.05;
-const PLAYER_SPEED = 5.2;
-const BOOST_MULTIPLIER = 1.52;
 const GORILLA_CHASE_SECONDS = 5;
 const GORILLA_CONTACT_DISTANCE = 1.12;
 const BANANA_CONTACT_DISTANCE = 1.05;
-const STORM_WARNING_SECONDS = 0.9;
+// Time from a storm's spawn to when its rain (and the gorilla swarm at
+// impact) begins, i.e. the player's window to notice the warning ring/cloud
+// and steer clear. Raised alongside shrinking STORM_MIN_CLEARANCE (see
+// rules.js) so storms that now appear near dead-ahead still leave enough
+// reaction time to turn away before the swarm lands -- fairness moves from
+// "never appears in front of you" to "you always have time to see it and
+// react."
+const STORM_WARNING_SECONDS = 2.2;
+// A banana already placed stays put until collected, but the player keeps
+// moving -- so without this, a banana placed in-band would simply be left
+// behind a few seconds later and never seen again. Once a banana drifts
+// past the band's outer edge relative to the player's *current* position,
+// it is relocated back into the band, keeping the annulus meaningful for
+// the whole run instead of just at spawn time. Comparing cosines avoids an
+// acos() call per banana per frame.
+const BANANA_LEASH_MIN_DOT = Math.cos(BANANA_MAX_SURFACE_DISTANCE / PLANET_RADIUS);
 const STORM_RAIN_SECONDS = 1.25;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const ZERO_VECTOR = new THREE.Vector3();
 const COLOR_LAND_LIGHT = new THREE.Color(0x8fcf5c);
 const COLOR_LAND = new THREE.Color(0x3f7a41);
 const COLOR_LAND_DARK = new THREE.Color(0x1f4a32);
-const COLOR_SAND = new THREE.Color(0xdcc17c);
-const COLOR_MUD = new THREE.Color(0x6d5334);
-const TERRAIN_RELIEF = 0.62;
-const OCEAN_RADIUS = PLANET_RADIUS - 0.2;
-const WATERLINE_ELEVATION = 1 - (PLANET_RADIUS - OCEAN_RADIUS) / TERRAIN_RELIEF;
+// Muted rock grey for the very lowest ground only. There is no water and no
+// sand band any more (see DEFECT B/C notes below): a narrow, three-green
+// palette plus this one grey stop keeps neighbouring facets close in colour.
+const COLOR_ROCK = new THREE.Color(0x6d6a5e);
+// Inward displacement amplitude for terrain relief. Radius is always
+// PLANET_RADIUS - (1 - elevation) * TERRAIN_RELIEF, so the walkable surface's
+// maximum radius stays exactly PLANET_RADIUS no matter how large this value
+// is -- only valleys sink further, hills never rise past the reference
+// sphere. That keeps the player/gorilla/banana placement at
+// PLANET_RADIUS + small offset guaranteed clip-free.
+const TERRAIN_RELIEF = 1.7;
+// Decorations avoid rooting in the lowest, rockiest ground. This replaces the
+// old waterline cutoff now that there is no ocean to define a shoreline.
+const LOWLAND_ELEVATION = 0.52;
+// Planet-scale ambient rain: a shell of grey storm clouds ringing the whole
+// globe with gorilla silhouettes falling radially inward (along -normal)
+// toward the surface, purely decorative. Shell height and fall range scale
+// with PLANET_RADIUS the same way HOME_ORBIT_* does below.
+const ORBITAL_CLOUD_SHELL_MIN = PLANET_RADIUS + 9;
+const ORBITAL_CLOUD_SHELL_MAX = PLANET_RADIUS + 15;
+const ORBITAL_FALLER_HEIGHT_MIN = 9;
+const ORBITAL_FALLER_HEIGHT_MAX = 15;
+// Fallers recycle back to the cloud shell well above the true maximum
+// terrain radius (PLANET_RADIUS) and above the tallest tree crowns (trees
+// top out around 3.4 units), so a clear gap of open air always separates a
+// faller from the ground -- nothing ever reads as sitting on or embedded in
+// the surface, unlike the old near-zero cutoff that let large silhouettes
+// dip into hills.
+const ORBITAL_FALLER_LOW = 5;
+// During gameplay, fallers whose surface normal sits within this cone of the
+// player's own "up" are culled so the ambient rain never overlaps the
+// playfield or reads as a real threat -- only far-side/near-horizon fallers
+// stay visible, matching "distant weather beyond the horizon".
+const ORBITAL_NEAR_SIDE_DOT = 0.3;
+// The home/result screens orbit the whole planet from outside, so unlike the
+// gameplay chase camera these distances scale with PLANET_RADIUS to keep the
+// planet framed at the same apparent size no matter how big it is.
+const HOME_ORBIT_RADIUS = (PLANET_RADIUS * 17) / 9;
+const HOME_ORBIT_HEIGHT = PLANET_RADIUS;
+const HOME_ORBIT_BOB = PLANET_RADIUS / 6;
+const HOME_LOOKAT_HEIGHT = PLANET_RADIUS / 9;
 const SKY_ZENITH_COLOR = new THREE.Color(0x0c1a3d);
 const SKY_MID_COLOR = new THREE.Color(0x1f6f6c);
 const SKY_HORIZON_COLOR = new THREE.Color(0xf2d59c);
+// Fog matches the thin, desaturated horizon band rather than the raw warm
+// accent colour, so distant terrain fades into the same sky it sits under
+// instead of vanishing into an orange haze.
+const SKY_FOG_COLOR = SKY_MID_COLOR.clone().lerp(SKY_HORIZON_COLOR, 0.35);
+// Fixed world-space sun direction for the sky dome only. This must NOT track
+// the player-following `this.sun` light (see updateCamera), or the glow disc
+// stays glued to the camera and washes the whole dome into one flat colour.
+const SUN_SKY_DIRECTION = new THREE.Vector3(12, 30, 18).normalize();
 
 const ui = {
   app: document.querySelector("#app"),
@@ -102,11 +168,14 @@ const ui = {
   controlTitle: document.querySelector("#control-title"),
   controlDetail: document.querySelector("#control-detail"),
   stormFlash: document.querySelector("#storm-flash"),
+  homeBestScore: document.querySelector("#home-best-score-value"),
   resultIcon: document.querySelector("#result-icon"),
   resultKicker: document.querySelector("#result-kicker"),
   resultTitle: document.querySelector("#result-title"),
   resultMessage: document.querySelector("#result-message"),
   resultScore: document.querySelector("#result-score"),
+  resultBestScore: document.querySelector("#result-best-score-value"),
+  resultNewRecord: document.querySelector("#result-new-record"),
   resultTime: document.querySelector("#result-time"),
   resultBananas: document.querySelector("#result-bananas"),
   resultBonus: document.querySelector("#result-bonus"),
@@ -493,28 +562,49 @@ class BananaField {
     this.right = new THREE.Vector3();
     this.back = new THREE.Vector3();
     this.forward = new THREE.Vector3(0, 0, -1);
+    this.tangent = new THREE.Vector3();
   }
 
-  reset(playerNormal) {
+  reset(playerNormal, playerFacing) {
     for (const item of this.items) {
       item.active = false;
       item.respawnAt = 0;
-      this.place(item, playerNormal);
+      this.place(item, playerNormal, playerFacing);
     }
     this.bananas.count = 0;
     this.tips.count = 0;
   }
 
-  randomNormal(target) {
-    const z = this.random.range(-1, 1);
-    const angle = this.random.range(0, Math.PI * 2);
-    const radius = Math.sqrt(Math.max(0, 1 - z * z));
-    return target.set(radius * Math.cos(angle), z, radius * Math.sin(angle));
+  // Places `target` at the given surface distance from `playerNormal`, at a
+  // bearing measured from `playerFacing` (0 = straight ahead of the
+  // player's actual movement direction). Distance is arc length (same units
+  // as PLANET_RADIUS), matching how storms/gorillas measure spawn distance.
+  placeAtSurfaceDistance(target, playerNormal, playerFacing, distance) {
+    this.right.crossVectors(playerFacing, playerNormal).normalize();
+    const bearing = pickBananaBearing(this.random);
+    this.tangent
+      .copy(playerFacing)
+      .multiplyScalar(Math.cos(bearing))
+      .addScaledVector(this.right, Math.sin(bearing));
+    const surfaceAngle = distance / PLANET_RADIUS;
+    target
+      .copy(playerNormal)
+      .multiplyScalar(Math.cos(surfaceAngle))
+      .addScaledVector(this.tangent, Math.sin(surfaceAngle))
+      .normalize();
   }
 
-  place(item, playerNormal) {
+  place(item, playerNormal, playerFacing) {
     for (let attempt = 0; attempt < 12; attempt += 1) {
-      this.randomNormal(item.normal);
+      // Bananas spawn within a reachable annulus of surface distance from
+      // the player, biased toward the direction the player is actually
+      // heading, rather than uniformly over the whole sphere -- near
+      // enough to be worth a detour, far enough to cost something.
+      const distance = getBananaSpawnDistance(this.random);
+      this.placeAtSurfaceDistance(item.normal, playerNormal, playerFacing, distance);
+      // Belt-and-suspenders: the band's minimum already keeps bananas off
+      // the player, but this guards against a degenerate (e.g. test-only)
+      // band configuration that could shrink to zero.
       if (item.normal.distanceToSquared(playerNormal) > 0.045) break;
     }
     item.spin = this.random.range(0, Math.PI * 2);
@@ -528,13 +618,13 @@ class BananaField {
       if (!item.active) continue;
       if (item.normal.distanceToSquared(playerNormal) > threshold) continue;
       item.active = false;
-      item.respawnAt = time + 0.55;
+      item.respawnAt = time + BANANA_RESPAWN_DELAY_SECONDS;
       return true;
     }
     return false;
   }
 
-  update(time, targetCount, playerNormal) {
+  update(time, targetCount, playerNormal, playerFacing) {
     let bananaInstance = 0;
     let tipInstance = 0;
     const visibleTarget = Math.min(targetCount, this.items.length);
@@ -547,8 +637,13 @@ class BananaField {
         continue;
       }
       if (!item.active && time >= item.respawnAt) {
-        this.place(item, playerNormal);
+        this.place(item, playerNormal, playerFacing);
         item.active = true;
+      } else if (item.active && item.normal.dot(playerNormal) < BANANA_LEASH_MIN_DOT) {
+        // The player has moved on and left this banana behind (they never
+        // move once placed); pull it back into the reachable band around
+        // wherever the player is now instead of leaving it stranded.
+        this.place(item, playerNormal, playerFacing);
       }
       if (!item.active) continue;
 
@@ -1005,6 +1100,270 @@ class StormCell {
   }
 }
 
+// Deterministic integer hash used only to pick each faller's *next* landing
+// spot when it loops back to the cloud shell. It is a pure function of
+// (faller index, loop count) -- never Math.random(), never the shared
+// SeededRandom stream -- so the ambient rain never perturbs the sequence
+// gameplay code draws from `this.random` for real spawns, and a given
+// ?seed=/time combination always looks the same.
+function orbitalHash(n) {
+  let x = n | 0;
+  x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
+  x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
+  x = (x ^ (x >>> 16)) >>> 0;
+  return x / 4294967296;
+}
+
+// Planet-scale ambient weather: a shell of grey storm clouds ringing the
+// whole sphere, plus a pool of gorilla silhouettes that continuously fall
+// inward (down each faller's own -normal) from the shell toward the surface
+// and loop back to a new spot once they land. Entirely decorative -- it
+// never touches gorillaPool/StormCell/collision code, following the same
+// instanced root/local/world matrix pattern as GorillaRenderer/StormCell.
+class OrbitalRain {
+  constructor(scene, cloudCount, fallerCount, random) {
+    this.fallerCount = fallerCount;
+    this.partsPerFaller = 3;
+
+    this.cloudGroup = new THREE.Group();
+    scene.add(this.cloudGroup);
+    const puffsPerCloud = 4;
+    // flatShading:false (smooth normals) is what keeps these reading as puffy
+    // storm clouds rather than faceted grey boulders -- the low-poly puff
+    // silhouette stays, but the hard per-face lighting jumps go away. The
+    // base material colour is white so the per-instance HSL colour set in
+    // buildClouds is the only thing controlling brightness (a mid-grey base
+    // times a mid-grey instance colour was multiplying down to near-black).
+    const puffGeometry = new THREE.IcosahedronGeometry(1, 1);
+    const puffMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.92,
+      flatShading: false,
+    });
+    this.clouds = new THREE.InstancedMesh(
+      puffGeometry,
+      puffMaterial,
+      Math.max(1, cloudCount * puffsPerCloud),
+    );
+    this.clouds.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(Math.max(1, cloudCount * puffsPerCloud) * 3),
+      3,
+    );
+    this.clouds.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.clouds.frustumCulled = false;
+    this.cloudGroup.add(this.clouds);
+    this.buildClouds(cloudCount, puffsPerCloud, random);
+
+    // MeshStandardMaterial (not the old MeshLambertMaterial) so these pick up
+    // the same hemisphere/sun/fill lighting response as the real gorillas
+    // instead of reading flat and dark. The material colour is white and the
+    // actual brown/tan comes from per-part instanceColor below, matching
+    // GorillaRenderer's real brown (0x3e2c28) / tan (0x8f6549) palette so the
+    // fallers read as gorilla bodies, not black silhouettes.
+    const bodyGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.9,
+      metalness: 0,
+    });
+    const fallerInstanceCount = Math.max(1, fallerCount * this.partsPerFaller);
+    this.fallers = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, fallerInstanceCount);
+    this.fallers.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(fallerInstanceCount * 3),
+      3,
+    );
+    this.fallers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.fallers.frustumCulled = false;
+    this.fallers.count = 0;
+    scene.add(this.fallers);
+    this.brownColor = new THREE.Color(0x3e2c28);
+    this.tanColor = new THREE.Color(0x8f6549);
+
+    this.startHeight = new Float32Array(fallerCount);
+    this.fallSpeed = new Float32Array(fallerCount);
+    this.phase = new Float32Array(fallerCount);
+    this.tumbleSeed = new Float32Array(fallerCount);
+    this.tumbleSpeed = new Float32Array(fallerCount);
+    this.bodyScale = new Float32Array(fallerCount);
+    for (let index = 0; index < fallerCount; index += 1) {
+      this.startHeight[index] = random.range(
+        ORBITAL_FALLER_HEIGHT_MIN,
+        ORBITAL_FALLER_HEIGHT_MAX,
+      );
+      this.fallSpeed[index] = random.range(1.3, 2.2);
+      this.phase[index] = random.range(0, 400);
+      this.tumbleSeed[index] = random.range(0, Math.PI * 2);
+      this.tumbleSpeed[index] = random.range(1.4, 3);
+      // Scaled way up from the original 0.75-1.25 -- at orbital camera
+      // distance a gorilla-proportioned box that size is a sub-pixel speck.
+      // This makes each faller read as a large tumbling body instead.
+      this.bodyScale[index] = random.range(2.8, 4.2);
+    }
+
+    this.normal = new THREE.Vector3();
+    this.position = new THREE.Vector3();
+    this.identityQuaternion = new THREE.Quaternion();
+    this.rootQuaternion = new THREE.Quaternion();
+    this.tumbleQuaternion = new THREE.Quaternion();
+    this.tumbleEuler = new THREE.Euler();
+    this.unitScale = new THREE.Vector3(1, 1, 1);
+    this.bodyMatrix = new THREE.Matrix4();
+    this.localMatrix = new THREE.Matrix4();
+    this.worldMatrix = new THREE.Matrix4();
+    this.partPosition = new THREE.Vector3();
+    this.partScale = new THREE.Vector3();
+  }
+
+  buildClouds(cloudCount, puffsPerCloud, random) {
+    const rootMatrix = new THREE.Matrix4();
+    const localMatrix = new THREE.Matrix4();
+    const worldMatrix = new THREE.Matrix4();
+    const normal = new THREE.Vector3();
+    const rootQuaternion = new THREE.Quaternion();
+    const identityQuaternion = new THREE.Quaternion();
+    const position = new THREE.Vector3();
+    const rootScale = new THREE.Vector3(1, 1, 1);
+    const puffPosition = new THREE.Vector3();
+    const puffScale = new THREE.Vector3();
+    const color = new THREE.Color();
+    const puffOffsets = [
+      [-1.25, 0.05, 0],
+      [0.1, 0.32, 0.05],
+      [1.2, -0.05, 0.18],
+      [0.25, -0.22, -0.75],
+    ];
+
+    let instanceIndex = 0;
+    for (let cloudIndex = 0; cloudIndex < cloudCount; cloudIndex += 1) {
+      const y = random.range(-1, 1);
+      const angle = random.range(0, Math.PI * 2);
+      const radiusXZ = Math.sqrt(Math.max(0, 1 - y * y));
+      normal.set(Math.cos(angle) * radiusXZ, y, Math.sin(angle) * radiusXZ);
+
+      const shellRadius = random.range(ORBITAL_CLOUD_SHELL_MIN, ORBITAL_CLOUD_SHELL_MAX);
+      position.copy(normal).multiplyScalar(shellRadius);
+      rootQuaternion.setFromUnitVectors(Y_AXIS, normal);
+      rootMatrix.compose(position, rootQuaternion, rootScale);
+
+      const cloudScale = random.range(1.7, 3.2);
+      // Grey with only a faint blue-green cast -- distinct from the pale
+      // warm smudges this replaces, and from the near-black storm clouds
+      // StormCell uses for the real threat telegraph. Lightness raised from
+      // the original 0.32-0.46 (which, combined with the material's own
+      // mid-grey base colour, multiplied down into near-black "boulders");
+      // the material base is now white so this value alone sets the shade,
+      // and it is picked bright enough to read as storm-grey without going
+      // pale or wispy.
+      const lightness = random.range(0.36, 0.48);
+      color.setHSL(0.57, 0.07, lightness);
+
+      for (const [ox, oy, oz] of puffOffsets) {
+        const puffSize = cloudScale * random.range(0.55, 1.05);
+        puffPosition.set(
+          ox * cloudScale + random.range(-0.15, 0.15),
+          oy * cloudScale,
+          oz * cloudScale,
+        );
+        puffScale.set(puffSize, puffSize * random.range(0.62, 0.88), puffSize);
+        localMatrix.compose(puffPosition, identityQuaternion, puffScale);
+        worldMatrix.multiplyMatrices(rootMatrix, localMatrix);
+        this.clouds.setMatrixAt(instanceIndex, worldMatrix);
+        color.offsetHSL(0, 0, random.range(-0.04, 0.04));
+        this.clouds.setColorAt(instanceIndex, color);
+        instanceIndex += 1;
+      }
+    }
+    this.clouds.count = instanceIndex;
+    this.clouds.instanceMatrix.needsUpdate = true;
+    this.clouds.instanceColor.needsUpdate = true;
+  }
+
+  updateFallers(time, playerNormal, cullNearSide) {
+    let instanceIndex = 0;
+    for (let index = 0; index < this.fallerCount; index += 1) {
+      const totalDistance = this.startHeight[index] - ORBITAL_FALLER_LOW;
+      const period = totalDistance / this.fallSpeed[index];
+      const raw = (time + this.phase[index]) / period;
+      const loopCount = Math.floor(raw);
+      const frac = raw - loopCount;
+      // Altitude above the surface: starts near the cloud shell (frac=0)
+      // and shrinks toward ORBITAL_FALLER_LOW (frac=1) -- always advancing
+      // downward along -normal, never sideways in world space.
+      const altitude = ORBITAL_FALLER_LOW + totalDistance * (1 - frac);
+
+      const key = (index * 92821 + loopCount * 50261) | 0;
+      const y = orbitalHash(key) * 2 - 1;
+      const angle = orbitalHash(key + 12345) * Math.PI * 2;
+      const radiusXZ = Math.sqrt(Math.max(0, 1 - y * y));
+      this.normal.set(Math.cos(angle) * radiusXZ, y, Math.sin(angle) * radiusXZ);
+
+      if (cullNearSide && this.normal.dot(playerNormal) > ORBITAL_NEAR_SIDE_DOT) {
+        continue;
+      }
+
+      this.position.copy(this.normal).multiplyScalar(PLANET_RADIUS + altitude);
+      this.rootQuaternion.setFromUnitVectors(Y_AXIS, this.normal);
+      this.tumbleEuler.set(
+        this.tumbleSeed[index] * 1.7 + time * this.tumbleSpeed[index],
+        this.tumbleSeed[index] * 0.9 + time * this.tumbleSpeed[index] * 0.6,
+        time * this.tumbleSpeed[index] * 1.3,
+      );
+      this.tumbleQuaternion.setFromEuler(this.tumbleEuler);
+      this.rootQuaternion.multiply(this.tumbleQuaternion);
+      this.bodyMatrix.compose(this.position, this.rootQuaternion, this.unitScale);
+
+      const size = this.bodyScale[index];
+      // Body and the limb bar stay the same gorilla brown as GorillaRenderer;
+      // the head gets the tan accent so each faller reads as a brown body
+      // with a lighter marking, the same brown+tan family as the real
+      // gorillas, instead of one flat silhouette.
+      instanceIndex = this.setPart(
+        instanceIndex,
+        this.brownColor,
+        0,
+        0,
+        0,
+        0.62 * size,
+        0.78 * size,
+        0.46 * size,
+      );
+      instanceIndex = this.setPart(
+        instanceIndex,
+        this.tanColor,
+        0,
+        0.58 * size,
+        -0.03,
+        0.4 * size,
+        0.38 * size,
+        0.38 * size,
+      );
+      instanceIndex = this.setPart(
+        instanceIndex,
+        this.brownColor,
+        0,
+        0.08 * size,
+        0,
+        1.2 * size,
+        0.2 * size,
+        0.22 * size,
+      );
+    }
+    this.fallers.count = instanceIndex;
+    this.fallers.instanceMatrix.needsUpdate = true;
+    this.fallers.instanceColor.needsUpdate = true;
+  }
+
+  setPart(index, color, x, y, z, sx, sy, sz) {
+    this.partPosition.set(x, y, z);
+    this.partScale.set(sx, sy, sz);
+    this.localMatrix.compose(this.partPosition, this.identityQuaternion, this.partScale);
+    this.worldMatrix.multiplyMatrices(this.bodyMatrix, this.localMatrix);
+    this.fallers.setMatrixAt(index, this.worldMatrix);
+    this.fallers.setColorAt(index, color);
+    return index + 1;
+  }
+}
+
 class GorillaRainGame {
   constructor() {
     this.profile = { ...getDeviceProfile(IS_MOBILE) };
@@ -1014,6 +1373,8 @@ class GorillaRainGame {
       this.profile.realShadows = false;
       this.profile.treeCount = Math.min(18, this.profile.treeCount);
       this.profile.rockCount = Math.min(14, this.profile.rockCount);
+      this.profile.ambientCloudCount = Math.min(8, this.profile.ambientCloudCount);
+      this.profile.ambientFallerCount = Math.min(8, this.profile.ambientFallerCount);
     }
 
     this.sound = new AudioController();
@@ -1080,7 +1441,7 @@ class GorillaRainGame {
     this.initializeEffects();
 
     this.bananaField = new BananaField(this.scene3d, this.random);
-    this.bananaField.reset(this.playerNormal);
+    this.bananaField.reset(this.playerNormal, this.playerFacing);
     this.gorillaRenderer = new GorillaRenderer(
       this.scene3d,
       this.profile.maxGorillas,
@@ -1095,10 +1456,12 @@ class GorillaRainGame {
       () => this.mode === "playing",
     );
 
+    this.loadBestScore();
     this.bindUI();
     this.updateOptionButtons();
     this.updateControlCopy();
     this.resetGameState();
+    this.updateBestScoreDisplays();
     this.showScreen("home");
     this.onResize();
     window.__GORILLA_RAIN_READY__ = true;
@@ -1115,7 +1478,7 @@ class GorillaRainGame {
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 1.32;
     this.renderer.shadowMap.enabled = this.profile.realShadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.setAttribute("aria-hidden", "true");
@@ -1125,14 +1488,20 @@ class GorillaRainGame {
   initializeScene() {
     this.scene3d = new THREE.Scene();
     this.scene3d.background = null;
-    this.scene3d.fog = new THREE.FogExp2(SKY_HORIZON_COLOR.getHex(), 0.0085);
-    this.camera = new THREE.PerspectiveCamera(IS_MOBILE ? 58 : 52, 1, 0.1, 200);
+    this.scene3d.fog = new THREE.FogExp2(SKY_FOG_COLOR.getHex(), 0.0051);
+    this.camera = new THREE.PerspectiveCamera(IS_MOBILE ? 58 : 52, 1, 0.1, 280);
     this.baseFov = this.camera.fov;
 
-    const hemisphere = new THREE.HemisphereLight(0x3d6e86, 0x18332a, 1.5);
+    // Ground colour lightened and intensity raised versus the radius-18
+    // tuning: at the bigger PLANET_RADIUS=30 scale, the far side of the
+    // globe (away from the sun) previously fell close to black, and trees
+    // planted there rendered as near-black spikes. This ambient floor is
+    // independent of the sun's directional occlusion, so it lifts every
+    // surface equally without flattening the lit side.
+    const hemisphere = new THREE.HemisphereLight(0x5688a0, 0x3c5c46, 2.55);
     this.scene3d.add(hemisphere);
 
-    this.sun = new THREE.DirectionalLight(0xffd9a0, 1.75);
+    this.sun = new THREE.DirectionalLight(0xffd9a0, 2.3);
     this.sun.position.set(12, 30, 18);
     this.sun.castShadow = this.profile.realShadows;
     this.sun.shadow.mapSize.set(1024, 1024);
@@ -1146,12 +1515,14 @@ class GorillaRainGame {
     this.sun.target.position.set(0, PLANET_RADIUS, 0);
     this.scene3d.add(this.sun, this.sun.target);
 
-    if (!IS_MOBILE) {
-      this.fillLight = new THREE.DirectionalLight(0x5d7fa8, 0.5);
-      this.fillLight.position.set(-14, -6, -12);
-      this.fillLight.target.position.set(0, PLANET_RADIUS, 0);
-      this.scene3d.add(this.fillLight, this.fillLight.target);
-    }
+    // Given to both devices now (a second directional light with no shadow
+    // map is cheap) specifically so far-side foliage keeps some colour
+    // instead of going black on mobile too; PC gets a slightly stronger dose
+    // to match its bigger, more visible tree counts.
+    this.fillLight = new THREE.DirectionalLight(0x6f97bd, IS_MOBILE ? 0.85 : 1.1);
+    this.fillLight.position.set(-14, -6, -12);
+    this.fillLight.target.position.set(0, PLANET_RADIUS, 0);
+    this.scene3d.add(this.fillLight, this.fillLight.target);
 
     this.createSkyDome();
   }
@@ -1162,7 +1533,7 @@ class GorillaRainGame {
       depthWrite: false,
       uniforms: {
         uTime: { value: 0 },
-        uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
+        uSunDirection: { value: SUN_SKY_DIRECTION.clone() },
         uZenithColor: { value: SKY_ZENITH_COLOR.clone() },
         uMidColor: { value: SKY_MID_COLOR.clone() },
         uHorizonColor: { value: SKY_HORIZON_COLOR.clone() },
@@ -1185,25 +1556,39 @@ class GorillaRainGame {
 
         void main() {
           vec3 viewDir = normalize(vWorldPosition);
-          float height = clamp(viewDir.y * 0.5 + 0.5, 0.0, 1.0);
-          vec3 sky = mix(uHorizonColor, uMidColor, smoothstep(0.05, 0.42, height));
-          sky = mix(sky, uZenithColor, smoothstep(0.32, 0.95, height));
+          float height = viewDir.y;
+
+          // Deep teal/navy dominates at every viewing angle, including the
+          // near-horizontal gameplay camera. Only above the horizon does the
+          // dome lighten toward the zenith colour; below it stays the same
+          // deep mid tone rather than brightening.
+          vec3 sky = mix(uMidColor, uZenithColor, smoothstep(-0.1, 0.75, height));
+
+          // The warm accent is confined to a thin, desaturated band right at
+          // the horizon (height ~ 0). Narrow smoothstep + low amplitude keeps
+          // this a sliver, never a wall of colour, so home and gameplay read
+          // as the same sky from different angles.
+          float horizonBand = 1.0 - smoothstep(0.0, 0.09, abs(height));
+          vec3 horizonTint = mix(uHorizonColor, uMidColor, 0.6);
+          sky = mix(sky, horizonTint, horizonBand * 0.4);
 
           float shimmer =
-            sin(viewDir.x * 30.0 + viewDir.z * 24.0 + uTime * 0.35) * 0.012 * (1.0 - height);
+            sin(viewDir.x * 30.0 + viewDir.z * 24.0 + uTime * 0.35) * 0.01 * horizonBand;
           sky += shimmer;
 
-          float sunDot = max(dot(viewDir, normalize(uSunDirection)), 0.0);
-          float sunGlow =
-            smoothstep(0.976, 0.998, sunDot) * 1.1 + smoothstep(0.86, 0.98, sunDot) * 0.28;
-          sky += sunGlow * vec3(1.0, 0.82, 0.52);
+          // Small, tight sun glow disc only -- it must read as a bright spot,
+          // not tint the whole dome.
+          float sunDot = max(dot(viewDir, uSunDirection), 0.0);
+          float core = pow(sunDot, 46.0);
+          float halo = pow(sunDot, 7.0) * 0.1;
+          sky += (core * 0.9 + halo) * vec3(1.0, 0.82, 0.52);
 
           gl_FragColor = vec4(sky, 1.0);
         }
       `,
     });
     this.skyMaterial = skyMaterial;
-    this.sky = new THREE.Mesh(new THREE.SphereGeometry(120, 32, 20), skyMaterial);
+    this.sky = new THREE.Mesh(new THREE.SphereGeometry(200, 32, 20), skyMaterial);
     this.sky.renderOrder = -1;
     this.sky.frustumCulled = false;
     this.scene3d.add(this.sky);
@@ -1211,20 +1596,17 @@ class GorillaRainGame {
 
   sampleTerrain(vertex) {
     const { x, y, z } = vertex;
-    const a = Math.sin(x * 2.1 + z * 1.7) * 0.5 + Math.cos(y * 2.6 - x * 1.3) * 0.5;
+    // Two broad, low-frequency octaves only: this keeps elevation spatially
+    // coherent so basins read as continuous shapes rather than single
+    // isolated triangles jumping to a different colour at random (a
+    // high-frequency third octave used to live here and produced exactly
+    // that speckle).
+    const a = Math.sin(x * 1.1 + z * 0.9) * 0.5 + Math.cos(y * 1.3 - x * 0.7) * 0.5;
     const b =
-      Math.sin(x * 4.6 - y * 3.8 + z * 2.3) * 0.5 + Math.cos(z * 5.2 + y * 1.9) * 0.5;
-    const c =
-      Math.sin(x * 9.7 + y * 8.3 - z * 6.5) * 0.5 + Math.cos(x * 7.4 - z * 10.1) * 0.5;
-    const raw = a * 0.55 + b * 0.3 + c * 0.15;
+      Math.sin(x * 2.2 - y * 1.8 + z * 1.4) * 0.5 + Math.cos(z * 2.5 + y * 1.1) * 0.5;
+    const raw = a * 0.7 + b * 0.3;
     const elevation = clamp(raw * 0.4 + 0.78, 0, 1);
-    const biome =
-      elevation < WATERLINE_ELEVATION
-        ? "water"
-        : elevation < WATERLINE_ELEVATION + 0.05
-          ? "sand"
-          : "land";
-    return { elevation, biome };
+    return { elevation };
   }
 
   terrainColor(elevation, vertex, target) {
@@ -1236,19 +1618,22 @@ class GorillaRainGame {
     const span = upper.at - lower.at;
     const t = span > 0.0001 ? clamp((elevation - lower.at) / span, 0, 1) : 0;
     target.lerpColors(lower.color, upper.color, t);
+    // Tiny deterministic per-vertex jitter for texture, kept low-amplitude so
+    // no single facet stands out in colour from its neighbours.
     const jitter =
       Math.sin(vertex.x * 53.7 + vertex.y * 19.1) * Math.cos(vertex.z * 41.3 + vertex.x * 11.7);
-    target.offsetHSL(jitter * 0.01, 0, jitter * 0.035);
+    target.offsetHSL(jitter * 0.003, 0, jitter * 0.012);
     return target;
   }
 
   initializeWorld() {
+    // Narrow, closely-related palette: three greens blended smoothly by
+    // elevation, plus a muted rock grey only on the very lowest ground.
+    // There is no waterline any more, so no sand/mud band either.
     this.terrainStops = [
-      { at: 0, color: COLOR_MUD },
-      { at: WATERLINE_ELEVATION - 0.04, color: COLOR_MUD },
-      { at: WATERLINE_ELEVATION, color: COLOR_SAND },
-      { at: WATERLINE_ELEVATION + 0.03, color: COLOR_LAND_DARK },
-      { at: 0.86, color: COLOR_LAND },
+      { at: 0.3, color: COLOR_ROCK },
+      { at: 0.5, color: COLOR_LAND_DARK },
+      { at: 0.78, color: COLOR_LAND },
       { at: 1, color: COLOR_LAND_LIGHT },
     ];
 
@@ -1274,24 +1659,11 @@ class GorillaRainGame {
       vertexColors: true,
       roughness: 0.94,
       metalness: 0,
+      flatShading: true,
     });
     this.land = new THREE.Mesh(landGeometry, landMaterial);
     this.land.receiveShadow = this.profile.realShadows;
     this.scene3d.add(this.land);
-
-    const oceanSegments = IS_MOBILE ? 32 : 48;
-    const oceanRings = IS_MOBILE ? 20 : 32;
-    this.ocean = new THREE.Mesh(
-      new THREE.SphereGeometry(OCEAN_RADIUS, oceanSegments, oceanRings),
-      new THREE.MeshStandardMaterial({
-        color: 0x1c7a82,
-        transparent: true,
-        opacity: 0.72,
-        roughness: 0.25,
-        metalness: 0.1,
-      }),
-    );
-    this.scene3d.add(this.ocean);
 
     const rim = new THREE.Mesh(
       new THREE.SphereGeometry(PLANET_RADIUS + 0.55, 32, 24),
@@ -1301,8 +1673,13 @@ class GorillaRainGame {
         depthWrite: false,
         blending: THREE.AdditiveBlending,
         uniforms: {
-          uColor: { value: new THREE.Color(0x7fe4d8) },
-          uPower: { value: 2.4 },
+          // Softer, less saturated teal so the rim reads as a thin
+          // atmospheric glow rather than shrink-wrap around the planet.
+          uColor: { value: new THREE.Color(0xa9e8de) },
+          // Higher power narrows the Fresnel falloff to a sliver at the
+          // silhouette edge instead of a thick halo.
+          uPower: { value: 5.2 },
+          uIntensity: { value: 0.5 },
         },
         vertexShader: `
           varying vec3 vNormal;
@@ -1317,12 +1694,13 @@ class GorillaRainGame {
         fragmentShader: `
           uniform vec3 uColor;
           uniform float uPower;
+          uniform float uIntensity;
           varying vec3 vNormal;
           varying vec3 vViewPosition;
           void main() {
             vec3 viewDir = normalize(vViewPosition);
             float rim = 1.0 - abs(dot(viewDir, normalize(vNormal)));
-            float intensity = pow(clamp(rim, 0.0, 1.0), uPower);
+            float intensity = pow(clamp(rim, 0.0, 1.0), uPower) * uIntensity;
             gl_FragColor = vec4(uColor, intensity);
           }
         `,
@@ -1335,18 +1713,26 @@ class GorillaRainGame {
     this.createAmbientClouds();
   }
 
+  groundRadius(normal) {
+    return PLANET_RADIUS - (1 - this.sampleTerrain(normal).elevation) * TERRAIN_RELIEF;
+  }
+
   pickLandNormal(target, poleThreshold) {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       this.randomUnitNormal(target);
       if (target.dot(Y_AXIS) > poleThreshold) target.negate();
-      if (this.sampleTerrain(target).elevation > WATERLINE_ELEVATION + 0.02) break;
+      if (this.sampleTerrain(target).elevation > LOWLAND_ELEVATION) break;
     }
     return target;
   }
 
   createDecorations() {
-    const trunkGeometry = new THREE.CylinderGeometry(0.14, 0.2, 0.9, 5);
-    const crownGeometry = new THREE.ConeGeometry(0.58, 1.45, 6);
+    const trunkGeometry = new THREE.CylinderGeometry(0.16, 0.22, 0.95, 5);
+    // Stouter than the radius-18 tuning (wider radius, less height) so trees
+    // read as a solid silhouette instead of a thin needle at the bigger
+    // PLANET_RADIUS=30 scale, where a thin cone can look like a dark spike
+    // against space on the unlit limb.
+    const crownGeometry = new THREE.ConeGeometry(0.68, 1.3, 6);
     const trunkMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       roughness: 0.96,
@@ -1397,9 +1783,15 @@ class GorillaRainGame {
       this.pickLandNormal(normal, 0.91);
       quaternion.setFromUnitVectors(Y_AXIS, normal);
       quaternion.multiply(spin.setFromAxisAngle(Y_AXIS, this.random.range(0, Math.PI * 2)));
-      const size = this.random.range(0.72, 1.18);
+      // Sized up versus the radius-18 tuning to hold its own against the
+      // bigger PLANET_RADIUS=30 globe when viewed from the orbital cameras.
+      const size = this.random.range(0.95, 1.5);
+      // Trees must root on the displaced terrain surface, not the un-displaced
+      // PLANET_RADIUS, or they float above/clip into basins wherever the
+      // ground has been pushed inward.
+      const base = this.groundRadius(normal);
 
-      position.copy(normal).multiplyScalar(PLANET_RADIUS + 0.43 * size);
+      position.copy(normal).multiplyScalar(base + 0.43 * size);
       scale.set(size, size, size);
       matrix.compose(position, quaternion, scale);
       trunkMesh.setMatrixAt(index, matrix);
@@ -1407,14 +1799,14 @@ class GorillaRainGame {
       color.offsetHSL(0, 0, this.random.range(-0.05, 0.05));
       trunkMesh.setColorAt(index, color);
 
-      position.copy(normal).multiplyScalar(PLANET_RADIUS + 1.36 * size);
+      position.copy(normal).multiplyScalar(base + 1.36 * size);
       matrix.compose(position, quaternion, scale);
       crownMesh.setMatrixAt(index, matrix);
       color.setHex(crownHues[Math.floor(this.random.next() * crownHues.length)]);
       color.offsetHSL(0, 0, this.random.range(-0.06, 0.06));
       crownMesh.setColorAt(index, color);
 
-      position.copy(normal).multiplyScalar(PLANET_RADIUS + 2.05 * size);
+      position.copy(normal).multiplyScalar(base + 2.05 * size);
       scale.set(size * 0.62, size * 0.66, size * 0.62);
       matrix.compose(position, quaternion, scale);
       crownTopMesh.setMatrixAt(index, matrix);
@@ -1451,7 +1843,7 @@ class GorillaRainGame {
         this.tempQuaternion.setFromAxisAngle(Y_AXIS, this.random.range(0, Math.PI * 2)),
       );
       const size = this.random.range(0.45, 1.15);
-      position.copy(normal).multiplyScalar(PLANET_RADIUS + size * 0.2);
+      position.copy(normal).multiplyScalar(this.groundRadius(normal) + size * 0.2);
       scale.set(size, size * this.random.range(0.6, 1), size);
       matrix.compose(position, quaternion, scale);
       rocks.setMatrixAt(index, matrix);
@@ -1485,7 +1877,7 @@ class GorillaRainGame {
     const brightCount = IS_MOBILE ? 20 : 40;
 
     const dimStars = new THREE.Points(
-      this.buildStarLayer(dimCount, 64, 104),
+      this.buildStarLayer(dimCount, 107, 174),
       new THREE.PointsMaterial({
         color: 0xbfeee7,
         size: IS_MOBILE ? 0.14 : 0.17,
@@ -1495,7 +1887,7 @@ class GorillaRainGame {
       }),
     );
     const brightStars = new THREE.Points(
-      this.buildStarLayer(brightCount, 70, 108),
+      this.buildStarLayer(brightCount, 117, 180),
       new THREE.PointsMaterial({
         color: 0xffffff,
         size: IS_MOBILE ? 0.32 : 0.42,
@@ -1511,33 +1903,16 @@ class GorillaRainGame {
   }
 
   createAmbientClouds() {
-    this.ambientClouds = new THREE.Group();
-    const geometry = new THREE.IcosahedronGeometry(1.15, 1);
-    const material = new THREE.MeshLambertMaterial({
-      color: 0xf6e6c8,
-      transparent: true,
-      opacity: 0.32,
-      depthWrite: false,
-    });
-    for (let index = 0; index < (IS_MOBILE ? 9 : 14); index += 1) {
-      const cloud = new THREE.Group();
-      const normal = new THREE.Vector3();
-      this.randomUnitNormal(normal);
-      cloud.position.copy(normal).multiplyScalar(this.random.range(42, 58));
-      cloud.quaternion.setFromUnitVectors(Y_AXIS, normal);
-      for (let puffIndex = 0; puffIndex < 3; puffIndex += 1) {
-        const puff = new THREE.Mesh(geometry, material);
-        puff.position.set((puffIndex - 1) * 1.5, this.random.range(-0.25, 0.4), 0);
-        puff.scale.set(
-          this.random.range(0.7, 1.6),
-          this.random.range(0.45, 1),
-          this.random.range(0.55, 1.15),
-        );
-        cloud.add(puff);
-      }
-      this.ambientClouds.add(cloud);
-    }
-    this.scene3d.add(this.ambientClouds);
+    // The planet-scale ambient rain: a shell of grey storm clouds ringing
+    // the whole globe with gorilla silhouettes falling radially inward.
+    // Entirely decorative -- see the OrbitalRain class for the instancing
+    // and per-faller fall/tumble/recycle math.
+    this.orbitalRain = new OrbitalRain(
+      this.scene3d,
+      this.profile.ambientCloudCount,
+      this.profile.ambientFallerCount,
+      this.random,
+    );
   }
 
   initializePlayer() {
@@ -1722,6 +2097,34 @@ class GorillaRainGame {
     ui.soundButton.textContent = this.sound.enabled ? "♪" : "×";
   }
 
+  loadBestScore() {
+    const stored = safeStorageGet("goriragouu-best-score", null);
+    const parsed = stored === null ? NaN : Number.parseInt(stored, 10);
+    this.hasBestScore = stored !== null && Number.isFinite(parsed);
+    this.bestScore = this.hasBestScore ? Math.max(0, parsed) : 0;
+  }
+
+  // Called after every finished run. Persists a new best when the just-
+  // finished score beats (or, on the very first-ever run, simply sets) the
+  // stored best, and reports whether this run set a new record.
+  registerScore(score) {
+    const previousBest = this.hasBestScore ? this.bestScore : -1;
+    const isNewRecord = score > previousBest;
+    if (isNewRecord) {
+      this.bestScore = score;
+      this.hasBestScore = true;
+      safeStorageSet("goriragouu-best-score", String(score));
+    }
+    this.updateBestScoreDisplays();
+    return isNewRecord;
+  }
+
+  updateBestScoreDisplays() {
+    const text = this.hasBestScore ? formatScore(this.bestScore) : "------";
+    if (ui.homeBestScore) ui.homeBestScore.textContent = text;
+    if (ui.resultBestScore) ui.resultBestScore.textContent = text;
+  }
+
   resetGameState() {
     this.gameElapsed = 0;
     this.bananaCount = 0;
@@ -1736,7 +2139,7 @@ class GorillaRainGame {
     this.viewForward.set(0, 0, -1);
     for (const gorilla of this.gorillaPool) gorilla.active = false;
     for (const storm of this.stormPool || []) storm.deactivate();
-    this.bananaField?.reset(this.playerNormal);
+    this.bananaField?.reset(this.playerNormal, this.playerFacing);
     this.updatePlayerTransform();
     this.updateCamera(1, true);
     this.gorillaRenderer?.update(this.gorillaPool, 0);
@@ -1913,6 +2316,7 @@ class GorillaRainGame {
       this.gameElapsed,
       this.currentStage.bananaTarget,
       this.playerNormal,
+      this.playerFacing,
     );
     if (
       this.bananaField.collect(
@@ -1935,9 +2339,13 @@ class GorillaRainGame {
 
     if (this.gameElapsed >= this.nextStormAt) {
       this.spawnStormWave(this.currentStage.stormLocations);
-      this.nextStormAt += this.profile.stormInterval;
+      // Storm cadence tightens as the run goes on (see getStormInterval),
+      // restoring late-game pressure now that placement is fair and the
+      // warning is readable.
+      const interval = getStormInterval(this.gameElapsed, this.profile.stormInterval);
+      this.nextStormAt += interval;
       if (this.nextStormAt <= this.gameElapsed) {
-        this.nextStormAt = this.gameElapsed + this.profile.stormInterval;
+        this.nextStormAt = this.gameElapsed + interval;
       }
     }
 
@@ -2046,15 +2454,17 @@ class GorillaRainGame {
   spawnStormWave(count) {
     const available = this.stormPool.filter((storm) => !storm.active);
     const actualCount = Math.min(count, available.length);
-    const baseAngle = this.random.range(0, Math.PI * 2);
-    const offsets =
-      actualCount === 1 ? [0] : actualCount === 2 ? [-0.78, 0.78] : [-1.34, 0, 1.34];
-    this.viewRight.crossVectors(this.viewForward, this.playerNormal).normalize();
+    // Angles are measured from the player's actual movement direction
+    // (playerFacing), not the camera's view forward, and pickStormAngles
+    // guarantees every one of them keeps clear of that heading -- so
+    // fleeing forward can never spawn a storm directly in the escape path.
+    const angles = pickStormAngles(actualCount, this.random);
+    this.viewRight.crossVectors(this.playerFacing, this.playerNormal).normalize();
 
     for (let index = 0; index < actualCount; index += 1) {
-      const angle = baseAngle + offsets[index] + this.random.range(-0.14, 0.14);
+      const angle = angles[index];
       this.tempA
-        .copy(this.viewForward)
+        .copy(this.playerFacing)
         .multiplyScalar(Math.cos(angle))
         .addScaledVector(this.viewRight, Math.sin(angle))
         .normalize();
@@ -2113,7 +2523,8 @@ class GorillaRainGame {
       gorilla.bornAt = this.gameElapsed;
       gorilla.dangerAt = this.gameElapsed + 0.38;
       gorilla.expiresAt = this.gameElapsed + GORILLA_CHASE_SECONDS;
-      gorilla.speed = this.random.range(4.5, 4.92);
+      const speedRange = getGorillaSpeedRange(this.gameElapsed);
+      gorilla.speed = this.random.range(speedRange.min, speedRange.max);
       gorilla.active = true;
       spawned += 1;
       if (spawned >= this.profile.gorillasPerStorm) break;
@@ -2198,12 +2609,12 @@ class GorillaRainGame {
   updateHomeCamera(delta) {
     const angle = this.ambientTime * 0.08;
     this.camera.position.set(
-      Math.sin(angle) * 34,
-      18 + Math.sin(angle * 0.7) * 3,
-      Math.cos(angle) * 34,
+      Math.sin(angle) * HOME_ORBIT_RADIUS,
+      HOME_ORBIT_HEIGHT + Math.sin(angle * 0.7) * HOME_ORBIT_BOB,
+      Math.cos(angle) * HOME_ORBIT_RADIUS,
     );
     this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(0, 2, 0);
+    this.camera.lookAt(0, HOME_LOOKAT_HEIGHT, 0);
     this.camera.fov +=
       (this.baseFov - this.camera.fov) * (1 - Math.exp(-delta * 5));
     this.camera.updateProjectionMatrix();
@@ -2236,6 +2647,7 @@ class GorillaRainGame {
         this.ambientTime,
         getStage(0).bananaTarget,
         this.playerNormal,
+        this.playerFacing,
       );
     } else if (this.mode === "result") {
       this.updateResultCamera(delta);
@@ -2243,6 +2655,7 @@ class GorillaRainGame {
         this.gameElapsed + this.ambientTime,
         this.currentStage.bananaTarget,
         this.playerNormal,
+        this.playerFacing,
       );
     } else {
       this.updateCamera(delta);
@@ -2251,12 +2664,19 @@ class GorillaRainGame {
     this.updatePlayerTransform();
     this.updatePlayerAnimation();
     this.gorillaRenderer.update(this.gorillaPool, this.gameElapsed);
-    this.ambientClouds.rotation.y += delta * 0.006;
+
+    // Motion-reduced users still get the ambient rain, just calmed way
+    // down rather than removed, per the existing 揺れ(motion) preference.
+    const orbitalMotionScale = this.motionEnabled ? 1 : 0.15;
+    this.orbitalRain.cloudGroup.rotation.y += delta * 0.006 * orbitalMotionScale;
+    const orbitalTime = this.ambientTime * orbitalMotionScale;
+    // Only cull near-side fallers during actual gameplay states -- home and
+    // result orbit the whole planet and should show the full ring.
+    const cullOrbitalNearSide =
+      this.mode === "playing" || this.mode === "countdown" || this.mode === "paused";
+    this.orbitalRain.updateFallers(orbitalTime, this.playerNormal, cullOrbitalNearSide);
 
     this.skyMaterial.uniforms.uTime.value = this.ambientTime;
-    this.skyMaterial.uniforms.uSunDirection.value.copy(this.sun.position).normalize();
-    this.ocean.material.opacity = 0.68 + Math.sin(this.ambientTime * 0.5) * 0.05;
-    this.ocean.rotation.y += delta * 0.01;
 
     const boosted = this.mode === "playing" && this.gameElapsed < this.boostUntil;
     ui.app.classList.toggle("is-boosting", boosted && this.motionEnabled);
@@ -2313,6 +2733,9 @@ class GorillaRainGame {
     ui.resultBananas.textContent = String(this.bananaCount);
     ui.resultBonus.textContent = String(getBonusSeconds(this.bananaCount));
     ui.resultMode.textContent = `${this.profile.label}：1地点につきゴリラ${this.profile.gorillasPerStorm}体`;
+
+    const isNewRecord = this.registerScore(score);
+    if (ui.resultNewRecord) ui.resultNewRecord.hidden = !isNewRecord;
 
     if (cleared) {
       ui.resultIcon.textContent = "🌤️";

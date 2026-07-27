@@ -3,18 +3,49 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  BANANA_BEARING_HALF_WIDTH,
+  BANANA_MAX_SURFACE_DISTANCE,
+  BANANA_MIN_SURFACE_DISTANCE,
   BASE_GAME_SECONDS,
+  BOOST_MULTIPLIER,
+  GORILLA_SPEED_MAX_EARLY,
+  PLAYER_SPEED,
+  STORM_INTERVAL_MIN_FACTOR,
+  STORM_MIN_CLEARANCE,
   bananasUntilBonus,
   calculateScore,
   extendBoost,
   formatScore,
+  getBananaSpawnDistance,
   getBonusMilestones,
   getBonusSeconds,
   getDeviceProfile,
+  getGorillaSpeedRange,
   getPlayableFrameDelta,
   getRemainingSeconds,
   getStage,
+  getStormInterval,
+  pickBananaBearing,
+  pickStormAngles,
 } from "../src/rules.js";
+
+// Minimal stand-in for the game's SeededRandom, deterministic and seedable
+// so these pure-function tests stay reproducible like the real game.
+function makeRandom(seed) {
+  let state = seed >>> 0 || 0x6d2b79f5;
+  return {
+    next() {
+      state += 0x6d2b79f5;
+      let value = state;
+      value = Math.imul(value ^ (value >>> 15), value | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    },
+    range(min, max) {
+      return min + (max - min) * this.next();
+    },
+  };
+}
 
 test("難度は生存時間30秒と50秒で切り替わる", () => {
   assert.equal(getStage(29.999).stormLocations, 1);
@@ -73,6 +104,82 @@ test("PCはSPよりゴリラと雨を増やすが、地点段階は共通", () =
 test("初期時間は60秒", () => {
   assert.equal(BASE_GAME_SECONDS, 60);
   assert.equal(getRemainingSeconds(0, 0), 60);
+});
+
+test("嵐は進行方向の正面から必ず離れて出現する", () => {
+  const random = makeRandom(42);
+  for (let trial = 0; trial < 200; trial += 1) {
+    const count = 1 + Math.floor(random.next() * 3);
+    const angles = pickStormAngles(count, random);
+    assert.equal(angles.length, count);
+    for (const angle of angles) {
+      assert.ok(angle >= STORM_MIN_CLEARANCE - 1e-9);
+      assert.ok(angle <= Math.PI * 2 - STORM_MIN_CLEARANCE + 1e-9);
+    }
+  }
+});
+
+test("嵐の角度は本数ぶんだけ返り、0本なら空配列", () => {
+  const random = makeRandom(7);
+  assert.deepEqual(pickStormAngles(0, random), []);
+  assert.equal(pickStormAngles(3, random).length, 3);
+  assert.equal(pickStormAngles(1, random).length, 1);
+});
+
+test("バナナは球面距離で近すぎず遠すぎない帯に出現する", () => {
+  const random = makeRandom(99);
+  assert.ok(BANANA_MIN_SURFACE_DISTANCE < BANANA_MAX_SURFACE_DISTANCE);
+  for (let trial = 0; trial < 500; trial += 1) {
+    const distance = getBananaSpawnDistance(random);
+    assert.ok(distance >= BANANA_MIN_SURFACE_DISTANCE);
+    assert.ok(distance <= BANANA_MAX_SURFACE_DISTANCE);
+  }
+});
+
+test("嵐の間隔は経過時間とともに詰まり、下限を割らない", () => {
+  const base = 5.2;
+  assert.equal(getStormInterval(0, base), base);
+  const mid = getStormInterval(27.5, base);
+  const late = getStormInterval(120, base);
+  assert.ok(mid < base);
+  assert.ok(late < mid);
+  assert.ok(Math.abs(late - base * STORM_INTERVAL_MIN_FACTOR) < 1e-9);
+  assert.equal(getStormInterval(-5, base), base);
+});
+
+test("バナナの方位は進行方向を中心とした扇の範囲に収まる", () => {
+  const random = makeRandom(13);
+  for (let trial = 0; trial < 500; trial += 1) {
+    const bearing = pickBananaBearing(random);
+    assert.ok(bearing >= -BANANA_BEARING_HALF_WIDTH - 1e-9);
+    assert.ok(bearing <= BANANA_BEARING_HALF_WIDTH + 1e-9);
+  }
+});
+
+test("ゴリラの速度は経過とともに上がり、序盤はプレイヤー未満・終盤は上回る", () => {
+  const early = getGorillaSpeedRange(0);
+  const late = getGorillaSpeedRange(999);
+  // Opening stays forgiving: even the fastest early gorilla can't catch an
+  // unboosted player who just keeps moving.
+  assert.ok(early.max < PLAYER_SPEED);
+  assert.equal(early.max, GORILLA_SPEED_MAX_EARLY);
+  assert.ok(late.max > early.max);
+  assert.ok(late.min >= early.min);
+});
+
+test("終盤のゴリラは無加速のプレイヤーより速いが、加速中のプレイヤーには届かない", () => {
+  // This is the core rebalance: reaction time + resource management replace
+  // "the enemy can never be fast enough" as the game's fairness basis. Late
+  // gorillas must genuinely outrun an unboosted player (so ignoring bananas
+  // is punished) while staying comfortably below boosted speed (so a player
+  // who banks and uses boost always escapes with margin).
+  const boostedSpeed = PLAYER_SPEED * BOOST_MULTIPLIER;
+  const late = getGorillaSpeedRange(999);
+  assert.ok(late.min > PLAYER_SPEED, "late-game gorillas must outrun an unboosted player");
+  assert.ok(
+    late.max < boostedSpeed * 0.9,
+    "late-game gorillas must stay comfortably below boosted player speed",
+  );
 });
 
 test("低フレームでもゲーム時計は実時間で60秒進む", () => {
