@@ -43,7 +43,7 @@ const IS_MOBILE =
   FORCED_DEVICE === "sp" ||
   (FORCED_DEVICE !== "pc" && IS_COARSE_POINTER && !HAS_FINE_POINTER);
 const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
-const PLANET_RADIUS = 18;
+const PLANET_RADIUS = 30;
 const PLAYER_HEIGHT = 0.05;
 const PLAYER_SPEED = 5.2;
 const BOOST_MULTIPLIER = 1.52;
@@ -57,14 +57,28 @@ const ZERO_VECTOR = new THREE.Vector3();
 const COLOR_LAND_LIGHT = new THREE.Color(0x8fcf5c);
 const COLOR_LAND = new THREE.Color(0x3f7a41);
 const COLOR_LAND_DARK = new THREE.Color(0x1f4a32);
-const COLOR_SAND = new THREE.Color(0xdcc17c);
-const COLOR_MUD = new THREE.Color(0x6d5334);
+// Muted rock grey for the very lowest ground only. There is no water and no
+// sand band any more (see DEFECT B/C notes below): a narrow, three-green
+// palette plus this one grey stop keeps neighbouring facets close in colour.
+const COLOR_ROCK = new THREE.Color(0x6d6a5e);
 const TERRAIN_RELIEF = 0.62;
-const OCEAN_RADIUS = PLANET_RADIUS - 0.2;
-const WATERLINE_ELEVATION = 1 - (PLANET_RADIUS - OCEAN_RADIUS) / TERRAIN_RELIEF;
+// Decorations avoid rooting in the lowest, rockiest ground. This replaces the
+// old waterline cutoff now that there is no ocean to define a shoreline.
+const LOWLAND_ELEVATION = 0.52;
+// The home/result screens orbit the whole planet from outside, so unlike the
+// gameplay chase camera these distances scale with PLANET_RADIUS to keep the
+// planet framed at the same apparent size no matter how big it is.
+const HOME_ORBIT_RADIUS = (PLANET_RADIUS * 17) / 9;
+const HOME_ORBIT_HEIGHT = PLANET_RADIUS;
+const HOME_ORBIT_BOB = PLANET_RADIUS / 6;
+const HOME_LOOKAT_HEIGHT = PLANET_RADIUS / 9;
 const SKY_ZENITH_COLOR = new THREE.Color(0x0c1a3d);
 const SKY_MID_COLOR = new THREE.Color(0x1f6f6c);
 const SKY_HORIZON_COLOR = new THREE.Color(0xf2d59c);
+// Fog matches the thin, desaturated horizon band rather than the raw warm
+// accent colour, so distant terrain fades into the same sky it sits under
+// instead of vanishing into an orange haze.
+const SKY_FOG_COLOR = SKY_MID_COLOR.clone().lerp(SKY_HORIZON_COLOR, 0.35);
 // Fixed world-space sun direction for the sky dome only. This must NOT track
 // the player-following `this.sun` light (see updateCamera), or the glow disc
 // stays glued to the camera and washes the whole dome into one flat colour.
@@ -1129,8 +1143,8 @@ class GorillaRainGame {
   initializeScene() {
     this.scene3d = new THREE.Scene();
     this.scene3d.background = null;
-    this.scene3d.fog = new THREE.FogExp2(SKY_HORIZON_COLOR.getHex(), 0.0085);
-    this.camera = new THREE.PerspectiveCamera(IS_MOBILE ? 58 : 52, 1, 0.1, 200);
+    this.scene3d.fog = new THREE.FogExp2(SKY_FOG_COLOR.getHex(), 0.0051);
+    this.camera = new THREE.PerspectiveCamera(IS_MOBILE ? 58 : 52, 1, 0.1, 280);
     this.baseFov = this.camera.fov;
 
     const hemisphere = new THREE.HemisphereLight(0x5688a0, 0x2a4a3a, 2.1);
@@ -1189,25 +1203,39 @@ class GorillaRainGame {
 
         void main() {
           vec3 viewDir = normalize(vWorldPosition);
-          float height = clamp(viewDir.y * 0.5 + 0.5, 0.0, 1.0);
-          vec3 sky = mix(uHorizonColor, uMidColor, smoothstep(0.05, 0.42, height));
-          sky = mix(sky, uZenithColor, smoothstep(0.32, 0.95, height));
+          float height = viewDir.y;
+
+          // Deep teal/navy dominates at every viewing angle, including the
+          // near-horizontal gameplay camera. Only above the horizon does the
+          // dome lighten toward the zenith colour; below it stays the same
+          // deep mid tone rather than brightening.
+          vec3 sky = mix(uMidColor, uZenithColor, smoothstep(-0.1, 0.75, height));
+
+          // The warm accent is confined to a thin, desaturated band right at
+          // the horizon (height ~ 0). Narrow smoothstep + low amplitude keeps
+          // this a sliver, never a wall of colour, so home and gameplay read
+          // as the same sky from different angles.
+          float horizonBand = 1.0 - smoothstep(0.0, 0.09, abs(height));
+          vec3 horizonTint = mix(uHorizonColor, uMidColor, 0.6);
+          sky = mix(sky, horizonTint, horizonBand * 0.4);
 
           float shimmer =
-            sin(viewDir.x * 30.0 + viewDir.z * 24.0 + uTime * 0.35) * 0.012 * (1.0 - height);
+            sin(viewDir.x * 30.0 + viewDir.z * 24.0 + uTime * 0.35) * 0.01 * horizonBand;
           sky += shimmer;
 
+          // Small, tight sun glow disc only -- it must read as a bright spot,
+          // not tint the whole dome.
           float sunDot = max(dot(viewDir, uSunDirection), 0.0);
-          float core = pow(sunDot, 28.0);
-          float halo = pow(sunDot, 5.0) * 0.18;
-          sky += (core * 0.85 + halo) * vec3(1.0, 0.82, 0.52);
+          float core = pow(sunDot, 46.0);
+          float halo = pow(sunDot, 7.0) * 0.1;
+          sky += (core * 0.9 + halo) * vec3(1.0, 0.82, 0.52);
 
           gl_FragColor = vec4(sky, 1.0);
         }
       `,
     });
     this.skyMaterial = skyMaterial;
-    this.sky = new THREE.Mesh(new THREE.SphereGeometry(120, 32, 20), skyMaterial);
+    this.sky = new THREE.Mesh(new THREE.SphereGeometry(200, 32, 20), skyMaterial);
     this.sky.renderOrder = -1;
     this.sky.frustumCulled = false;
     this.scene3d.add(this.sky);
@@ -1216,21 +1244,16 @@ class GorillaRainGame {
   sampleTerrain(vertex) {
     const { x, y, z } = vertex;
     // Two broad, low-frequency octaves only: this keeps elevation spatially
-    // coherent so basins and shorelines read as continuous shapes rather than
-    // single isolated triangles flipping biome at random (a high-frequency
-    // third octave used to live here and produced exactly that speckle).
+    // coherent so basins read as continuous shapes rather than single
+    // isolated triangles jumping to a different colour at random (a
+    // high-frequency third octave used to live here and produced exactly
+    // that speckle).
     const a = Math.sin(x * 1.1 + z * 0.9) * 0.5 + Math.cos(y * 1.3 - x * 0.7) * 0.5;
     const b =
       Math.sin(x * 2.2 - y * 1.8 + z * 1.4) * 0.5 + Math.cos(z * 2.5 + y * 1.1) * 0.5;
     const raw = a * 0.7 + b * 0.3;
     const elevation = clamp(raw * 0.4 + 0.78, 0, 1);
-    const biome =
-      elevation < WATERLINE_ELEVATION
-        ? "water"
-        : elevation < WATERLINE_ELEVATION + 0.05
-          ? "sand"
-          : "land";
-    return { elevation, biome };
+    return { elevation };
   }
 
   terrainColor(elevation, vertex, target) {
@@ -1242,19 +1265,22 @@ class GorillaRainGame {
     const span = upper.at - lower.at;
     const t = span > 0.0001 ? clamp((elevation - lower.at) / span, 0, 1) : 0;
     target.lerpColors(lower.color, upper.color, t);
+    // Tiny deterministic per-vertex jitter for texture, kept low-amplitude so
+    // no single facet stands out in colour from its neighbours.
     const jitter =
       Math.sin(vertex.x * 53.7 + vertex.y * 19.1) * Math.cos(vertex.z * 41.3 + vertex.x * 11.7);
-    target.offsetHSL(jitter * 0.01, 0, jitter * 0.035);
+    target.offsetHSL(jitter * 0.003, 0, jitter * 0.012);
     return target;
   }
 
   initializeWorld() {
+    // Narrow, closely-related palette: three greens blended smoothly by
+    // elevation, plus a muted rock grey only on the very lowest ground.
+    // There is no waterline any more, so no sand/mud band either.
     this.terrainStops = [
-      { at: 0, color: COLOR_MUD },
-      { at: WATERLINE_ELEVATION - 0.04, color: COLOR_MUD },
-      { at: WATERLINE_ELEVATION, color: COLOR_SAND },
-      { at: WATERLINE_ELEVATION + 0.05, color: COLOR_LAND_DARK },
-      { at: 0.86, color: COLOR_LAND },
+      { at: 0.3, color: COLOR_ROCK },
+      { at: 0.5, color: COLOR_LAND_DARK },
+      { at: 0.78, color: COLOR_LAND },
       { at: 1, color: COLOR_LAND_LIGHT },
     ];
 
@@ -1280,26 +1306,11 @@ class GorillaRainGame {
       vertexColors: true,
       roughness: 0.94,
       metalness: 0,
+      flatShading: true,
     });
     this.land = new THREE.Mesh(landGeometry, landMaterial);
     this.land.receiveShadow = this.profile.realShadows;
     this.scene3d.add(this.land);
-
-    const oceanSegments = IS_MOBILE ? 32 : 48;
-    const oceanRings = IS_MOBILE ? 20 : 32;
-    this.ocean = new THREE.Mesh(
-      new THREE.SphereGeometry(OCEAN_RADIUS, oceanSegments, oceanRings),
-      new THREE.MeshStandardMaterial({
-        color: 0x1f7f7a,
-        emissive: 0x0c3a3c,
-        emissiveIntensity: 0.4,
-        transparent: true,
-        opacity: 0.72,
-        roughness: 0.65,
-        metalness: 0,
-      }),
-    );
-    this.scene3d.add(this.ocean);
 
     const rim = new THREE.Mesh(
       new THREE.SphereGeometry(PLANET_RADIUS + 0.55, 32, 24),
@@ -1351,7 +1362,7 @@ class GorillaRainGame {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       this.randomUnitNormal(target);
       if (target.dot(Y_AXIS) > poleThreshold) target.negate();
-      if (this.sampleTerrain(target).elevation > WATERLINE_ELEVATION + 0.02) break;
+      if (this.sampleTerrain(target).elevation > LOWLAND_ELEVATION) break;
     }
     return target;
   }
@@ -1501,7 +1512,7 @@ class GorillaRainGame {
     const brightCount = IS_MOBILE ? 20 : 40;
 
     const dimStars = new THREE.Points(
-      this.buildStarLayer(dimCount, 64, 104),
+      this.buildStarLayer(dimCount, 107, 174),
       new THREE.PointsMaterial({
         color: 0xbfeee7,
         size: IS_MOBILE ? 0.14 : 0.17,
@@ -1511,7 +1522,7 @@ class GorillaRainGame {
       }),
     );
     const brightStars = new THREE.Points(
-      this.buildStarLayer(brightCount, 70, 108),
+      this.buildStarLayer(brightCount, 117, 180),
       new THREE.PointsMaterial({
         color: 0xffffff,
         size: IS_MOBILE ? 0.32 : 0.42,
@@ -1539,7 +1550,7 @@ class GorillaRainGame {
       const cloud = new THREE.Group();
       const normal = new THREE.Vector3();
       this.randomUnitNormal(normal);
-      cloud.position.copy(normal).multiplyScalar(this.random.range(42, 58));
+      cloud.position.copy(normal).multiplyScalar(this.random.range(70, 97));
       cloud.quaternion.setFromUnitVectors(Y_AXIS, normal);
       for (let puffIndex = 0; puffIndex < 3; puffIndex += 1) {
         const puff = new THREE.Mesh(geometry, material);
@@ -2214,12 +2225,12 @@ class GorillaRainGame {
   updateHomeCamera(delta) {
     const angle = this.ambientTime * 0.08;
     this.camera.position.set(
-      Math.sin(angle) * 34,
-      18 + Math.sin(angle * 0.7) * 3,
-      Math.cos(angle) * 34,
+      Math.sin(angle) * HOME_ORBIT_RADIUS,
+      HOME_ORBIT_HEIGHT + Math.sin(angle * 0.7) * HOME_ORBIT_BOB,
+      Math.cos(angle) * HOME_ORBIT_RADIUS,
     );
     this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(0, 2, 0);
+    this.camera.lookAt(0, HOME_LOOKAT_HEIGHT, 0);
     this.camera.fov +=
       (this.baseFov - this.camera.fov) * (1 - Math.exp(-delta * 5));
     this.camera.updateProjectionMatrix();
@@ -2270,8 +2281,6 @@ class GorillaRainGame {
     this.ambientClouds.rotation.y += delta * 0.006;
 
     this.skyMaterial.uniforms.uTime.value = this.ambientTime;
-    this.ocean.material.opacity = 0.68 + Math.sin(this.ambientTime * 0.5) * 0.05;
-    this.ocean.rotation.y += delta * 0.01;
 
     const boosted = this.mode === "playing" && this.gameElapsed < this.boostUntil;
     ui.app.classList.toggle("is-boosting", boosted && this.motionEnabled);

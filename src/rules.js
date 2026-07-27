@@ -90,8 +90,8 @@ export function getDeviceProfile(isMobile) {
       stormInterval: 5.8,
       rainDropsPerStorm: 420,
       maxPixelRatio: 1.35,
-      treeCount: 26,
-      rockCount: 20,
+      treeCount: 72,
+      rockCount: 56,
       realShadows: false,
     });
   }
@@ -104,8 +104,8 @@ export function getDeviceProfile(isMobile) {
     stormInterval: 5.2,
     rainDropsPerStorm: 760,
     maxPixelRatio: 1.6,
-    treeCount: 44,
-    rockCount: 30,
+    treeCount: 120,
+    rockCount: 85,
     realShadows: true,
   });
 }
