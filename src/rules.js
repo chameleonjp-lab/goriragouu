@@ -95,9 +95,11 @@ export function getDeviceProfile(isMobile) {
       realShadows: false,
       // Planet-scale ambient weather (cloud shell + inward-falling gorilla
       // silhouettes) rendered around the whole globe. Kept lower on mobile
-      // since it is always-on decoration, never gameplay.
+      // since it is always-on decoration, never gameplay. Faller count is
+      // deliberately modest -- a handful of large, legible falling bodies
+      // reads better than a crowd of small ones.
       ambientCloudCount: 12,
-      ambientFallerCount: 30,
+      ambientFallerCount: 10,
     });
   }
 
@@ -113,6 +115,6 @@ export function getDeviceProfile(isMobile) {
     rockCount: 85,
     realShadows: true,
     ambientCloudCount: 24,
-    ambientFallerCount: 64,
+    ambientFallerCount: 20,
   });
 }

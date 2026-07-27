@@ -77,12 +77,15 @@ const LOWLAND_ELEVATION = 0.52;
 // with PLANET_RADIUS the same way HOME_ORBIT_* does below.
 const ORBITAL_CLOUD_SHELL_MIN = PLANET_RADIUS + 9;
 const ORBITAL_CLOUD_SHELL_MAX = PLANET_RADIUS + 15;
-const ORBITAL_FALLER_HEIGHT_MIN = 8;
-const ORBITAL_FALLER_HEIGHT_MAX = 14;
-// Fallers stop just above the true maximum terrain radius (PLANET_RADIUS)
-// rather than at the exact ground height, so they never appear to sink into
-// a hill regardless of local elevation.
-const ORBITAL_FALLER_LOW = 0.4;
+const ORBITAL_FALLER_HEIGHT_MIN = 9;
+const ORBITAL_FALLER_HEIGHT_MAX = 15;
+// Fallers recycle back to the cloud shell well above the true maximum
+// terrain radius (PLANET_RADIUS) and above the tallest tree crowns (trees
+// top out around 3.4 units), so a clear gap of open air always separates a
+// faller from the ground -- nothing ever reads as sitting on or embedded in
+// the surface, unlike the old near-zero cutoff that let large silhouettes
+// dip into hills.
+const ORBITAL_FALLER_LOW = 5;
 // During gameplay, fallers whose surface normal sits within this cone of the
 // player's own "up" are culled so the ambient rain never overlaps the
 // playfield or reads as a real threat -- only far-side/near-horizon fallers
@@ -1074,11 +1077,17 @@ class OrbitalRain {
     this.cloudGroup = new THREE.Group();
     scene.add(this.cloudGroup);
     const puffsPerCloud = 4;
+    // flatShading:false (smooth normals) is what keeps these reading as puffy
+    // storm clouds rather than faceted grey boulders -- the low-poly puff
+    // silhouette stays, but the hard per-face lighting jumps go away. The
+    // base material colour is white so the per-instance HSL colour set in
+    // buildClouds is the only thing controlling brightness (a mid-grey base
+    // times a mid-grey instance colour was multiplying down to near-black).
     const puffGeometry = new THREE.IcosahedronGeometry(1, 1);
     const puffMaterial = new THREE.MeshStandardMaterial({
-      color: 0x878d93,
-      roughness: 0.96,
-      flatShading: true,
+      color: 0xffffff,
+      roughness: 0.92,
+      flatShading: false,
     });
     this.clouds = new THREE.InstancedMesh(
       puffGeometry,
@@ -1094,17 +1103,30 @@ class OrbitalRain {
     this.cloudGroup.add(this.clouds);
     this.buildClouds(cloudCount, puffsPerCloud, random);
 
+    // MeshStandardMaterial (not the old MeshLambertMaterial) so these pick up
+    // the same hemisphere/sun/fill lighting response as the real gorillas
+    // instead of reading flat and dark. The material colour is white and the
+    // actual brown/tan comes from per-part instanceColor below, matching
+    // GorillaRenderer's real brown (0x3e2c28) / tan (0x8f6549) palette so the
+    // fallers read as gorilla bodies, not black silhouettes.
     const bodyGeometry = new THREE.BoxGeometry(1, 1, 1);
-    const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0x2c2621 });
-    this.fallers = new THREE.InstancedMesh(
-      bodyGeometry,
-      bodyMaterial,
-      Math.max(1, fallerCount * this.partsPerFaller),
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.9,
+      metalness: 0,
+    });
+    const fallerInstanceCount = Math.max(1, fallerCount * this.partsPerFaller);
+    this.fallers = new THREE.InstancedMesh(bodyGeometry, bodyMaterial, fallerInstanceCount);
+    this.fallers.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(fallerInstanceCount * 3),
+      3,
     );
     this.fallers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.fallers.frustumCulled = false;
     this.fallers.count = 0;
     scene.add(this.fallers);
+    this.brownColor = new THREE.Color(0x3e2c28);
+    this.tanColor = new THREE.Color(0x8f6549);
 
     this.startHeight = new Float32Array(fallerCount);
     this.fallSpeed = new Float32Array(fallerCount);
@@ -1117,11 +1139,14 @@ class OrbitalRain {
         ORBITAL_FALLER_HEIGHT_MIN,
         ORBITAL_FALLER_HEIGHT_MAX,
       );
-      this.fallSpeed[index] = random.range(2.1, 3.4);
+      this.fallSpeed[index] = random.range(1.3, 2.2);
       this.phase[index] = random.range(0, 400);
       this.tumbleSeed[index] = random.range(0, Math.PI * 2);
       this.tumbleSpeed[index] = random.range(1.4, 3);
-      this.bodyScale[index] = random.range(0.75, 1.25);
+      // Scaled way up from the original 0.75-1.25 -- at orbital camera
+      // distance a gorilla-proportioned box that size is a sub-pixel speck.
+      // This makes each faller read as a large tumbling body instead.
+      this.bodyScale[index] = random.range(2.8, 4.2);
     }
 
     this.normal = new THREE.Vector3();
@@ -1172,9 +1197,14 @@ class OrbitalRain {
       const cloudScale = random.range(1.7, 3.2);
       // Grey with only a faint blue-green cast -- distinct from the pale
       // warm smudges this replaces, and from the near-black storm clouds
-      // StormCell uses for the real threat telegraph.
-      const lightness = random.range(0.32, 0.46);
-      color.setHSL(0.57, 0.05, lightness);
+      // StormCell uses for the real threat telegraph. Lightness raised from
+      // the original 0.32-0.46 (which, combined with the material's own
+      // mid-grey base colour, multiplied down into near-black "boulders");
+      // the material base is now white so this value alone sets the shade,
+      // and it is picked bright enough to read as storm-grey without going
+      // pale or wispy.
+      const lightness = random.range(0.36, 0.48);
+      color.setHSL(0.57, 0.07, lightness);
 
       for (const [ox, oy, oz] of puffOffsets) {
         const puffSize = cloudScale * random.range(0.55, 1.05);
@@ -1232,9 +1262,23 @@ class OrbitalRain {
       this.bodyMatrix.compose(this.position, this.rootQuaternion, this.unitScale);
 
       const size = this.bodyScale[index];
-      instanceIndex = this.setPart(instanceIndex, 0, 0, 0, 0.62 * size, 0.78 * size, 0.46 * size);
+      // Body and the limb bar stay the same gorilla brown as GorillaRenderer;
+      // the head gets the tan accent so each faller reads as a brown body
+      // with a lighter marking, the same brown+tan family as the real
+      // gorillas, instead of one flat silhouette.
       instanceIndex = this.setPart(
         instanceIndex,
+        this.brownColor,
+        0,
+        0,
+        0,
+        0.62 * size,
+        0.78 * size,
+        0.46 * size,
+      );
+      instanceIndex = this.setPart(
+        instanceIndex,
+        this.tanColor,
         0,
         0.58 * size,
         -0.03,
@@ -1244,6 +1288,7 @@ class OrbitalRain {
       );
       instanceIndex = this.setPart(
         instanceIndex,
+        this.brownColor,
         0,
         0.08 * size,
         0,
@@ -1254,14 +1299,16 @@ class OrbitalRain {
     }
     this.fallers.count = instanceIndex;
     this.fallers.instanceMatrix.needsUpdate = true;
+    this.fallers.instanceColor.needsUpdate = true;
   }
 
-  setPart(index, x, y, z, sx, sy, sz) {
+  setPart(index, color, x, y, z, sx, sy, sz) {
     this.partPosition.set(x, y, z);
     this.partScale.set(sx, sy, sz);
     this.localMatrix.compose(this.partPosition, this.identityQuaternion, this.partScale);
     this.worldMatrix.multiplyMatrices(this.bodyMatrix, this.localMatrix);
     this.fallers.setMatrixAt(index, this.worldMatrix);
+    this.fallers.setColorAt(index, color);
     return index + 1;
   }
 }
@@ -1276,7 +1323,7 @@ class GorillaRainGame {
       this.profile.treeCount = Math.min(18, this.profile.treeCount);
       this.profile.rockCount = Math.min(14, this.profile.rockCount);
       this.profile.ambientCloudCount = Math.min(8, this.profile.ambientCloudCount);
-      this.profile.ambientFallerCount = Math.min(18, this.profile.ambientFallerCount);
+      this.profile.ambientFallerCount = Math.min(8, this.profile.ambientFallerCount);
     }
 
     this.sound = new AudioController();
