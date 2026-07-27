@@ -93,6 +93,11 @@ export function getDeviceProfile(isMobile) {
       treeCount: 72,
       rockCount: 56,
       realShadows: false,
+      // Planet-scale ambient weather (cloud shell + inward-falling gorilla
+      // silhouettes) rendered around the whole globe. Kept lower on mobile
+      // since it is always-on decoration, never gameplay.
+      ambientCloudCount: 12,
+      ambientFallerCount: 30,
     });
   }
 
@@ -107,5 +112,7 @@ export function getDeviceProfile(isMobile) {
     treeCount: 120,
     rockCount: 85,
     realShadows: true,
+    ambientCloudCount: 24,
+    ambientFallerCount: 64,
   });
 }
