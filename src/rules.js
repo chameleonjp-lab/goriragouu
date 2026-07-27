@@ -9,21 +9,21 @@ export const STAGES = Object.freeze([
     index: 0,
     startsAt: 0,
     stormLocations: 1,
-    bananaTarget: 6,
+    bananaTarget: 2,
     label: "1地点",
   }),
   Object.freeze({
     index: 1,
     startsAt: 30,
     stormLocations: 2,
-    bananaTarget: 9,
+    bananaTarget: 3,
     label: "2地点",
   }),
   Object.freeze({
     index: 2,
     startsAt: 50,
     stormLocations: 3,
-    bananaTarget: 12,
+    bananaTarget: 4,
     label: "3地点",
   }),
 ]);
@@ -124,8 +124,16 @@ export function pickStormAngles(count, random, minClearance = STORM_MIN_CLEARANC
 // back into the band -- see BananaField in game.js), so this band also
 // controls how tight that leash is: tighter means more frequent, closer
 // re-rolls, which matters a lot given the tiny contact radius below.
-export const BANANA_MIN_SURFACE_DISTANCE = 7;
-export const BANANA_MAX_SURFACE_DISTANCE = 18;
+export const BANANA_MIN_SURFACE_DISTANCE = 9;
+export const BANANA_MAX_SURFACE_DISTANCE = 20;
+
+// How long a collected banana's slot stays empty before a replacement is
+// placed. Combined with the small number of simultaneous slots (see
+// STAGES.bananaTarget above), this is what keeps collection an occasional,
+// deliberate detour instead of a passive side-effect of just running
+// forward -- the previous short delay (0.55s) let a couple of slots
+// conveyor-belt bananas past the player continuously.
+export const BANANA_RESPAWN_DELAY_SECONDS = 3.4;
 
 // Pure helper: returns a single random surface distance inside the band.
 // `random` must expose `.range(min, max)`, matching pickStormAngles above.
@@ -163,8 +171,8 @@ export function pickBananaBearing(random, halfWidth = BANANA_BEARING_HALF_WIDTH)
 // toothless. Interval shrinks linearly from `baseInterval` down to
 // `baseInterval * STORM_INTERVAL_MIN_FACTOR` by `STORM_INTERVAL_RAMP_SECONDS`
 // elapsed, then holds there.
-export const STORM_INTERVAL_MIN_FACTOR = 0.55;
-export const STORM_INTERVAL_RAMP_SECONDS = 55;
+export const STORM_INTERVAL_MIN_FACTOR = 0.42;
+export const STORM_INTERVAL_RAMP_SECONDS = 42;
 
 export function getStormInterval(elapsedSeconds, baseInterval) {
   const safeBase = Number.isFinite(baseInterval) && baseInterval > 0 ? baseInterval : 1;
@@ -181,9 +189,9 @@ export function getStormInterval(elapsedSeconds, baseInterval) {
 // reaching (let alone exceeding) PLAYER_SPEED.
 export const GORILLA_SPEED_MIN_EARLY = 4.5;
 export const GORILLA_SPEED_MAX_EARLY = 4.92;
-export const GORILLA_SPEED_MIN_LATE = 4.75;
-export const GORILLA_SPEED_MAX_LATE = 5.08;
-export const GORILLA_SPEED_RAMP_SECONDS = 50;
+export const GORILLA_SPEED_MIN_LATE = 4.9;
+export const GORILLA_SPEED_MAX_LATE = 5.16;
+export const GORILLA_SPEED_RAMP_SECONDS = 40;
 
 export function getGorillaSpeedRange(elapsedSeconds) {
   const safeElapsed = Number.isFinite(elapsedSeconds) ? Math.max(0, elapsedSeconds) : 0;

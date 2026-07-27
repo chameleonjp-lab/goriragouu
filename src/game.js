@@ -1,5 +1,6 @@
 import {
   BANANA_MAX_SURFACE_DISTANCE,
+  BANANA_RESPAWN_DELAY_SECONDS,
   BASE_GAME_SECONDS,
   bananasUntilBonus,
   calculateScore,
@@ -610,7 +611,7 @@ class BananaField {
       if (!item.active) continue;
       if (item.normal.distanceToSquared(playerNormal) > threshold) continue;
       item.active = false;
-      item.respawnAt = time + 0.55;
+      item.respawnAt = time + BANANA_RESPAWN_DELAY_SECONDS;
       return true;
     }
     return false;
