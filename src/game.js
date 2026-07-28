@@ -16,6 +16,7 @@ import {
   PLAYER_SPEED,
   ROCK_MODEL_RADIUS,
   ROCK_SLOW_MULTIPLIER,
+  SCORE_PER_BANANA,
   STORM_FALL_SECONDS,
   STORM_MIN_CLEARANCE,
   STORM_SPAWN_DISTANCE_MAX,
@@ -86,6 +87,15 @@ const IS_MOBILE =
   FORCED_DEVICE === "sp" ||
   (FORCED_DEVICE !== "pc" && IS_COARSE_POINTER && !HAS_FINE_POINTER);
 const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
+const GAME_SLUG = "goriragouu";
+const CLIENT_VERSION = "goriragouu_v20260728_01";
+const GAME_URL = "https://chameleonjp-lab.github.io/goriragouu/";
+const SUPABASE_URL = "https://mlpnjgezrnhdxsxolyzj.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY =
+  "sb_publishable_drzcy0v97knU6FgjqSgBHw_0A9XPdFM";
+const SUPABASE_MODULE_URL =
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.9/+esm";
+const NAME_STORAGE_KEY = `chameleonjp_${GAME_SLUG}_player_name`;
 const PLAYER_HEIGHT = 0.05;
 const GORILLA_CHASE_SECONDS = 5;
 const GORILLA_CONTACT_DISTANCE = STRAIGHT_STORM_CONTACT_DISTANCE;
@@ -182,12 +192,18 @@ const ui = {
   loading: document.querySelector("#loading"),
   loadingMessage: document.querySelector("#loading-message"),
   webglError: document.querySelector("#webgl-error"),
+  webglErrorTitle: document.querySelector("#webgl-error-title"),
+  webglErrorMessage: document.querySelector("#webgl-error-message"),
   home: document.querySelector("#home-screen"),
   game: document.querySelector("#game-screen"),
   result: document.querySelector("#result-screen"),
   startButton: document.querySelector("#start-button"),
   replayButton: document.querySelector("#replay-button"),
   shareButton: document.querySelector("#share-button"),
+  homeShareButton: document.querySelector("#home-share-button"),
+  homeLabLink: document.querySelector("#home-lab-link"),
+  resultHomeButton: document.querySelector("#result-home-button"),
+  resultLabLink: document.querySelector("#result-lab-link"),
   pauseButton: document.querySelector("#pause-button"),
   resumeButton: document.querySelector("#resume-button"),
   pauseOverlay: document.querySelector("#pause-overlay"),
@@ -206,24 +222,29 @@ const ui = {
   countdown: document.querySelector("#countdown"),
   countdownValue: document.querySelector("#countdown-value"),
   toast: document.querySelector("#toast"),
+  bananaScoreFx: document.querySelector("#banana-score-fx"),
   soundButton: document.querySelector("#sound-button"),
   homeSoundButton: document.querySelector("#home-sound-button"),
   motionButton: document.querySelector("#motion-button"),
   controlTitle: document.querySelector("#control-title"),
   controlDetail: document.querySelector("#control-detail"),
   stormFlash: document.querySelector("#storm-flash"),
+  playerNameInput: document.querySelector("#player-name-input"),
+  playerNameMessage: document.querySelector("#player-name-message"),
   homeBestScore: document.querySelector("#home-best-score-value"),
   resultIcon: document.querySelector("#result-icon"),
   resultKicker: document.querySelector("#result-kicker"),
   resultTitle: document.querySelector("#result-title"),
   resultMessage: document.querySelector("#result-message"),
   resultScore: document.querySelector("#result-score"),
+  resultBestScoreLabel: document.querySelector("#result-best-score-label"),
   resultBestScore: document.querySelector("#result-best-score-value"),
   resultNewRecord: document.querySelector("#result-new-record"),
   resultTime: document.querySelector("#result-time"),
   resultBananas: document.querySelector("#result-bananas"),
   resultBonus: document.querySelector("#result-bonus"),
   resultMode: document.querySelector("#result-mode"),
+  rankingStatus: document.querySelector("#ranking-status"),
 };
 
 function clamp(value, min, max) {
@@ -251,6 +272,10 @@ function safeStorageSet(key, value) {
   }
 }
 
+function normalizeDisplayName(value) {
+  return String(value || "").trim().slice(0, 10);
+}
+
 class SeededRandom {
   constructor(seed) {
     this.state = seed >>> 0 || 0x6d2b79f5;
@@ -270,7 +295,7 @@ class SeededRandom {
 
 class AudioController {
   constructor() {
-    this.enabled = safeStorageGet("goriragouu-sound", "on") !== "off";
+    this.enabled = safeStorageGet("goriragouu-sound", "off") === "on";
     this.context = null;
     this.master = null;
     this.noiseBuffer = null;
@@ -408,6 +433,52 @@ class AudioController {
       volume: 0.14,
       type: "triangle",
     });
+  }
+}
+
+class RankingClient {
+  constructor() {
+    this.clientPromise = null;
+  }
+
+  connect() {
+    if (!this.clientPromise) {
+      this.clientPromise = import(SUPABASE_MODULE_URL)
+        .then(({ createClient }) =>
+          createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+            auth: {
+              persistSession: false,
+              autoRefreshToken: false,
+              detectSessionInUrl: false,
+            },
+          }),
+        )
+        .catch((error) => {
+          console.warn("ランキング機能の読み込みに失敗しました。", error);
+          this.clientPromise = null;
+          return null;
+        });
+    }
+    return this.clientPromise;
+  }
+
+  async submit(displayName, score) {
+    const client = await this.connect();
+    if (!client) throw new Error("ranking client unavailable");
+
+    const { data, error } = await client.rpc("submit_score", {
+      p_display_name: displayName,
+      p_game_slug: GAME_SLUG,
+      p_score: Math.trunc(Number(score || 0)),
+      p_client_version: CLIENT_VERSION,
+    });
+    if (error) throw error;
+
+    const result = Array.isArray(data) ? data[0] : data;
+    if (!result || result.accepted !== true) {
+      throw new Error("score was not accepted");
+    }
+    return result;
   }
 }
 
@@ -1394,9 +1465,16 @@ class GorillaRainGame {
     }
 
     this.sound = new AudioController();
+    this.ranking = new RankingClient();
     this.motionEnabled =
-      safeStorageGet("goriragouu-motion", "on") !== "off" &&
+      safeStorageGet("goriragouu-motion", "off") === "on" &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    this.displayName = "";
+    this.scoreSubmissionRunId = 0;
+    this.scoreSubmitAttempted = false;
+    this.scoreSubmitFinished = false;
+    this.webglContextLost = false;
+    this.contextLossPreviousMode = "home";
     this.mode = "home";
     this.resumeFromMode = "playing";
     this.gameElapsed = 0;
@@ -1410,6 +1488,7 @@ class GorillaRainGame {
     this.ambientTime = 0;
     this.cameraShake = 0;
     this.toastTimer = 0;
+    this.scoreFxTimer = 0;
     this.lastCountdownNumber = -1;
     this.pixelRatio = 0;
     this.performanceFrames = 0;
@@ -1442,6 +1521,7 @@ class GorillaRainGame {
     this.straightStormBestCandidate = new THREE.Vector3();
     this.regularStormBestCandidate = new THREE.Vector3();
     this.orbitalViewNormal = new THREE.Vector3();
+    this.scoreFxPosition = new THREE.Vector3();
     this.tempQuaternion = new THREE.Quaternion();
     this.straightTransportQuaternion = new THREE.Quaternion();
     this.tempMatrix = new THREE.Matrix4();
@@ -1503,11 +1583,15 @@ class GorillaRainGame {
     );
 
     this.loadBestScore();
+    this.loadPlayerName();
     this.bindUI();
     this.updateOptionButtons();
     this.updateControlCopy();
     this.resetGameState();
     this.updateBestScoreDisplays();
+    window.setTimeout(() => {
+      void this.ranking.connect();
+    }, 0);
     this.showScreen("home");
     this.onResize();
     window.__GORILLA_RAIN_READY__ = true;
@@ -1528,6 +1612,16 @@ class GorillaRainGame {
     this.renderer.shadowMap.enabled = this.profile.realShadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.setAttribute("aria-hidden", "true");
+    this.renderer.domElement.addEventListener(
+      "webglcontextlost",
+      (event) => this.handleWebGLContextLost(event),
+      false,
+    );
+    this.renderer.domElement.addEventListener(
+      "webglcontextrestored",
+      () => this.handleWebGLContextRestored(),
+      false,
+    );
     ui.scene.appendChild(this.renderer.domElement);
   }
 
@@ -1999,8 +2093,8 @@ class GorillaRainGame {
     this.player = new THREE.Group();
     this.scene3d.add(this.player);
     const skin = new THREE.MeshStandardMaterial({ color: 0xd8a77e, roughness: 0.82 });
-    const shirt = new THREE.MeshStandardMaterial({ color: 0x42b6a7, roughness: 0.76 });
-    const pants = new THREE.MeshStandardMaterial({ color: 0x243c55, roughness: 0.86 });
+    const shirt = new THREE.MeshStandardMaterial({ color: 0x8b5cf6, roughness: 0.76 });
+    const pants = new THREE.MeshStandardMaterial({ color: 0x4c1d95, roughness: 0.86 });
     const hair = new THREE.MeshStandardMaterial({ color: 0x33251e, roughness: 0.96 });
     const white = new THREE.MeshBasicMaterial({ color: 0xf7fff6 });
     const black = new THREE.MeshBasicMaterial({ color: 0x14201d });
@@ -2087,16 +2181,30 @@ class GorillaRainGame {
 
   bindUI() {
     ui.startButton.addEventListener("click", async () => {
+      if (!this.acceptPlayerName()) return;
       this.requestFullscreen();
       await this.sound.unlock();
       this.startNewGame();
     });
     ui.replayButton.addEventListener("click", async () => {
+      if (!this.displayName) {
+        this.returnHome();
+        return;
+      }
       this.requestFullscreen();
       await this.sound.unlock();
       this.startNewGame();
     });
     ui.shareButton.addEventListener("click", () => this.shareResult());
+    ui.homeShareButton.addEventListener("click", () => this.shareGame());
+    ui.resultHomeButton.addEventListener("click", () => this.returnHome());
+    for (const labLink of [ui.homeLabLink, ui.resultLabLink]) {
+      labLink.addEventListener("click", (event) => {
+        if (labLink.getAttribute("aria-disabled") === "true") {
+          event.preventDefault();
+        }
+      });
+    }
     ui.pauseButton.addEventListener("click", () => this.pauseGame());
     ui.resumeButton.addEventListener("click", async () => {
       await this.sound.unlock();
@@ -2114,6 +2222,16 @@ class GorillaRainGame {
       this.motionEnabled = !this.motionEnabled;
       safeStorageSet("goriragouu-motion", this.motionEnabled ? "on" : "off");
       this.updateOptionButtons();
+    });
+    ui.playerNameInput.addEventListener("input", () => {
+      ui.playerNameInput.closest(".player-name-card")?.classList.remove("invalid");
+      ui.playerNameMessage.textContent =
+        "この名前で結果をランキングへ自動送信します。";
+    });
+    ui.playerNameInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      ui.startButton.click();
     });
 
     window.addEventListener("resize", () => this.onResize());
@@ -2150,6 +2268,131 @@ class GorillaRainGame {
     document.documentElement.requestFullscreen({ navigationUI: "hide" }).catch(() => {
       // Fullscreen support varies by browser; the fixed viewport remains playable.
     });
+  }
+
+  loadPlayerName() {
+    const stored = normalizeDisplayName(safeStorageGet(NAME_STORAGE_KEY, ""));
+    this.displayName = stored;
+    ui.playerNameInput.value = stored;
+    if (stored) {
+      ui.playerNameMessage.textContent =
+        `保存済みの「${stored}」でランキングへ送信します。`;
+    }
+  }
+
+  acceptPlayerName() {
+    const name = normalizeDisplayName(ui.playerNameInput.value);
+    const card = ui.playerNameInput.closest(".player-name-card");
+    if (!name) {
+      this.displayName = "";
+      card?.classList.add("invalid");
+      ui.playerNameMessage.textContent =
+        "ランキング名を入力してからゲームを始めてください。";
+      ui.playerNameInput.focus({ preventScroll: false });
+      return false;
+    }
+
+    this.displayName = name;
+    ui.playerNameInput.value = name;
+    card?.classList.remove("invalid");
+    safeStorageSet(NAME_STORAGE_KEY, name);
+    ui.playerNameMessage.textContent =
+      `「${name}」でランキングへ自動送信します。`;
+    ui.playerNameInput.blur();
+    return true;
+  }
+
+  returnHome() {
+    this.controls.reset();
+    ui.app.classList.remove("is-playing", "is-boosting");
+    document.body.classList.remove("is-playing");
+    ui.bananaScoreFx.classList.remove("active");
+    window.clearTimeout(this.scoreFxTimer);
+    this.showScreen("home");
+    this.updateBestScoreDisplays();
+  }
+
+  setRankingStatus(message, state = "pending") {
+    ui.rankingStatus.textContent = message;
+    ui.rankingStatus.dataset.state = state;
+  }
+
+  setLabNavigationLocked(locked) {
+    for (const labLink of [ui.homeLabLink, ui.resultLabLink]) {
+      labLink.setAttribute("aria-disabled", String(locked));
+      labLink.tabIndex = locked ? -1 : 0;
+    }
+  }
+
+  async submitGameScore(score, runId) {
+    if (
+      runId !== this.scoreSubmissionRunId ||
+      this.scoreSubmitAttempted ||
+      this.scoreSubmitFinished
+    ) {
+      return;
+    }
+
+    this.scoreSubmitAttempted = true;
+    const displayName = normalizeDisplayName(this.displayName);
+    if (!displayName) {
+      this.setRankingStatus(
+        "名前を確認できなかったため、ランキングへ送信できませんでした。",
+        "error",
+      );
+      this.setLabNavigationLocked(false);
+      return;
+    }
+
+    this.setRankingStatus("ランキングへ送信中…");
+    try {
+      const result = await this.ranking.submit(displayName, score);
+      if (runId !== this.scoreSubmissionRunId) return;
+
+      this.scoreSubmitFinished = true;
+      const registeredBest = Number(result.result_best_score);
+      if (Number.isFinite(registeredBest)) {
+        ui.resultBestScoreLabel.textContent = "登録名のベスト";
+        ui.resultBestScore.textContent = formatScore(registeredBest);
+      }
+      this.setRankingStatus(
+        result.is_new_best
+          ? `「${displayName}」のベスト記録を更新しました。`
+          : `「${displayName}」の記録をランキングへ送信しました。`,
+        "success",
+      );
+    } catch (error) {
+      if (runId !== this.scoreSubmissionRunId) return;
+      console.warn("ランキング送信に失敗しました。", error);
+      this.setRankingStatus(
+        "ランキング送信に失敗しました。通信状態を確認してください。",
+        "error",
+      );
+    } finally {
+      if (runId === this.scoreSubmissionRunId) {
+        this.setLabNavigationLocked(false);
+      }
+    }
+  }
+
+  showBananaScoreEffect() {
+    const effect = ui.bananaScoreFx;
+    const scoreText = effect.querySelector("strong");
+    if (scoreText) scoreText.textContent = `+${SCORE_PER_BANANA}`;
+
+    this.scoreFxPosition.copy(this.player.position).project(this.camera);
+    const left = clamp((this.scoreFxPosition.x * 0.5 + 0.5) * 100, 16, 84);
+    const top = clamp((-this.scoreFxPosition.y * 0.5 + 0.5) * 100, 24, 78);
+    effect.style.setProperty("--score-fx-left", `${left.toFixed(2)}%`);
+    effect.style.setProperty("--score-fx-top", `${top.toFixed(2)}%`);
+
+    window.clearTimeout(this.scoreFxTimer);
+    effect.classList.remove("active");
+    void effect.offsetWidth;
+    effect.classList.add("active");
+    this.scoreFxTimer = window.setTimeout(() => {
+      effect.classList.remove("active");
+    }, 850);
   }
 
   updateControlCopy() {
@@ -2236,12 +2479,24 @@ class GorillaRainGame {
   }
 
   startNewGame() {
+    if (this.webglContextLost) return;
+
     if (!this.hasFixedSeed) {
       this.seed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
     }
     this.random = new SeededRandom(this.seed);
     this.straightStormRandom = new SeededRandom(this.seed ^ 0x6a09e667);
     this.bananaField.random = this.random;
+    this.scoreSubmissionRunId += 1;
+    this.scoreSubmitAttempted = false;
+    this.scoreSubmitFinished = false;
+    this.setLabNavigationLocked(false);
+    this.setRankingStatus(
+      "結果はゲーム終了時にランキングへ自動送信します。",
+    );
+    ui.resultBestScoreLabel.textContent = "端末の自己ベスト";
+    ui.bananaScoreFx.classList.remove("active");
+    window.clearTimeout(this.scoreFxTimer);
     this.resetGameState();
     this.showScreen("game");
     this.mode = "countdown";
@@ -2296,6 +2551,59 @@ class GorillaRainGame {
     });
   }
 
+  handleWebGLContextLost(event) {
+    event.preventDefault();
+    if (this.webglContextLost) return;
+
+    this.webglContextLost = true;
+    this.contextLossPreviousMode = this.mode;
+    this.mode = "context-lost";
+    this.controls?.reset();
+    ui.countdown.hidden = true;
+    ui.pauseButton.disabled = true;
+    ui.soundButton.disabled = true;
+    ui.webglErrorTitle.textContent = "3D画面を復旧しています";
+    ui.webglErrorMessage.textContent =
+      "端末の3D表示が一時停止しました。ゲームの進行も止めています。この画面のままお待ちください。";
+    ui.webglError.hidden = false;
+  }
+
+  handleWebGLContextRestored() {
+    if (!this.webglContextLost) return;
+
+    this.webglContextLost = false;
+    const previousMode = this.contextLossPreviousMode;
+    this.lastFrameAt = performance.now();
+    this.accumulator = 0;
+    ui.webglError.hidden = true;
+    ui.webglErrorTitle.textContent = "3D画面を開けませんでした";
+    ui.webglErrorMessage.textContent =
+      "WebGLが使える最新のSafari、Chrome、Edgeで開き直してください。";
+
+    if (previousMode === "playing" || previousMode === "countdown") {
+      this.resumeFromMode = previousMode;
+      this.mode = "paused";
+      ui.pauseOverlay.hidden = false;
+      if (!document.hidden) {
+        this.resumeGame();
+        this.showToast("3D画面を復旧しました");
+      }
+      return;
+    }
+
+    if (previousMode === "paused") {
+      this.mode = "paused";
+      ui.pauseOverlay.hidden = false;
+      ui.pauseButton.disabled = true;
+      ui.soundButton.disabled = true;
+      return;
+    }
+
+    this.mode = previousMode;
+    ui.pauseButton.disabled = false;
+    ui.soundButton.disabled = false;
+  }
+
   updateCountdown(delta) {
     this.countdownRemaining = Math.max(0, this.countdownRemaining - delta);
     const number = Math.ceil(this.countdownRemaining);
@@ -2316,6 +2624,11 @@ class GorillaRainGame {
   }
 
   frame(timeMs) {
+    if (this.webglContextLost) {
+      this.lastFrameAt = timeMs;
+      return;
+    }
+
     const measuredDelta = Math.max(0, (timeMs - this.lastFrameAt) / 1000);
     let rawDelta = getPlayableFrameDelta(measuredDelta);
     this.lastFrameAt = timeMs;
@@ -2405,6 +2718,7 @@ class GorillaRainGame {
       const previousMilestone = getBonusMilestones(this.bananaCount);
       this.bananaCount += 1;
       this.boostUntil = extendBoost(this.boostUntil, this.gameElapsed);
+      this.showBananaScoreEffect();
       const newMilestone = getBonusMilestones(this.bananaCount);
       if (newMilestone > previousMilestone) {
         this.sound.bonus();
@@ -3240,8 +3554,10 @@ class GorillaRainGame {
     ui.resultTime.textContent = this.gameElapsed.toFixed(1);
     ui.resultBananas.textContent = String(this.bananaCount);
     ui.resultBonus.textContent = String(getBonusSeconds(this.bananaCount));
-    ui.resultMode.textContent = `${this.profile.label}：1地点につきゴリラ${this.profile.gorillasPerStorm}体`;
+    ui.resultMode.textContent =
+      `${this.profile.label}：ゲーム条件は全端末共通`;
 
+    ui.resultBestScoreLabel.textContent = "端末の自己ベスト";
     const isNewRecord = this.registerScore(score);
     if (ui.resultNewRecord) ui.resultNewRecord.hidden = !isNewRecord;
 
@@ -3259,9 +3575,20 @@ class GorillaRainGame {
       this.sound.gameOver();
     }
     this.showScreen("result");
+    this.setLabNavigationLocked(true);
+    void this.submitGameScore(score, this.scoreSubmissionRunId);
     window.requestAnimationFrame(() => {
       ui.resultTitle.focus({ preventScroll: true });
     });
+  }
+
+  async shareGame() {
+    const text = [
+      "【ゴリラ豪雨】",
+      "球体の島を走り、突然降るゴリラの群れから生還を目指そう。",
+      GAME_URL,
+    ].join("\n");
+    await this.shareContent(text, ui.homeShareButton);
   }
 
   async shareResult() {
@@ -3271,10 +3598,14 @@ class GorillaRainGame {
       "【ゴリラ豪雨】",
       outcome,
       `生存 ${this.gameElapsed.toFixed(1)}秒 / 🍌 ${this.bananaCount}本`,
-      `SCORE ${score}（${this.profile.label}）`,
+      `SCORE ${score}`,
+      GAME_URL,
     ].join("\n");
-    const shareData = { title: "ゴリラ豪雨", text, url: window.location.href };
+    await this.shareContent(text, ui.shareButton);
+  }
 
+  async shareContent(text, button) {
+    const shareData = { title: "ゴリラ豪雨", text };
     if (navigator.share) {
       try {
         await navigator.share(shareData);
@@ -3285,14 +3616,14 @@ class GorillaRainGame {
     }
 
     try {
-      await navigator.clipboard.writeText(`${text}\n${window.location.href}`);
-      const original = ui.shareButton.textContent;
-      ui.shareButton.textContent = "コピーしました";
+      await navigator.clipboard.writeText(text);
+      const original = button.textContent;
+      button.textContent = "コピーしました";
       window.setTimeout(() => {
-        ui.shareButton.textContent = original;
+        button.textContent = original;
       }, 1600);
     } catch {
-      ui.shareButton.textContent = "コピーできませんでした";
+      button.textContent = "コピーできませんでした";
     }
   }
 

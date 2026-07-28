@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1, viewport-fit=cover"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
     />
     <meta
       name="description"
@@ -12,6 +12,18 @@
     />
     <meta name="theme-color" content="#071d20" />
     <meta name="color-scheme" content="dark" />
+    <meta property="og:title" content="ゴリラ豪雨" />
+    <meta
+      property="og:description"
+      content="球体の島を駆け回り、空から突然降るゴリラ豪雨から逃げる3Dブラウザゲーム。"
+    />
+    <meta
+      property="og:url"
+      content="https://chameleonjp-lab.github.io/goriragouu/"
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="canonical" href="https://chameleonjp-lab.github.io/goriragouu/" />
     <title>ゴリラ豪雨</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -46,8 +58,25 @@
             <div><b>🪨 🌲</b><span>石は減速<br />木は半透明の壁</span></div>
           </div>
 
+          <label class="player-name-card" for="player-name-input">
+            <span>ランキング名</span>
+            <input
+              id="player-name-input"
+              type="text"
+              maxlength="10"
+              autocomplete="nickname"
+              enterkeyhint="done"
+              placeholder="10文字まで"
+              aria-describedby="player-name-message"
+              required
+            />
+            <small id="player-name-message" role="status" aria-live="polite">
+              最初に名前を入力してください。次回から保存されます。
+            </small>
+          </label>
+
           <div id="home-best-score" class="best-score-note">
-            <span>自己ベスト</span>
+            <span>端末の自己ベスト</span>
             <strong id="home-best-score-value">------</strong>
           </div>
 
@@ -64,6 +93,16 @@
             </p>
           </div>
 
+          <details class="rules-details">
+            <summary>ルール説明</summary>
+            <ul>
+              <li>ゴリラに触れると、その場でゲーム終了です。</li>
+              <li>石に触れている間は減速し、半透明の木は通り抜けられません。</li>
+              <li>バナナ1本で100点と2秒の加速。10本ごとに残り時間が5秒増えます。</li>
+              <li>同じ方向へ走り続けると、通常とは別の豪雨が前方へ現れます。</li>
+            </ul>
+          </details>
+
           <div class="home-options">
             <button
               id="motion-button"
@@ -71,17 +110,29 @@
               type="button"
               aria-pressed="false"
             >
-              揺れ：あり
+              揺れ：なし
             </button>
             <button
               id="home-sound-button"
               class="option-button"
               type="button"
-              aria-pressed="true"
+              aria-pressed="false"
             >
-              音：あり
+              音：なし
             </button>
           </div>
+
+          <nav class="home-links" aria-label="関連メニュー">
+            <button id="home-share-button" class="text-link-button" type="button">
+              ゲームをシェア
+            </button>
+            <a
+              id="home-lab-link"
+              href="https://chameleonjp.codeberg.page/chameleonjp_lab/"
+            >
+              カメレオンJPの実験場へ
+            </a>
+          </nav>
         </section>
       </main>
 
@@ -121,6 +172,18 @@
           <p>加速中 <strong id="boost-value">2.0</strong>秒</p>
         </div>
 
+        <div id="banana-score-fx" class="banana-score-fx" aria-hidden="true">
+          <strong>+100</strong>
+          <i style="--spark-x: -48px; --spark-y: -22px"></i>
+          <i style="--spark-x: -34px; --spark-y: -52px"></i>
+          <i style="--spark-x: 0px; --spark-y: -60px"></i>
+          <i style="--spark-x: 36px; --spark-y: -48px"></i>
+          <i style="--spark-x: 52px; --spark-y: -14px"></i>
+          <i style="--spark-x: 38px; --spark-y: 24px"></i>
+          <i style="--spark-x: -2px; --spark-y: 32px"></i>
+          <i style="--spark-x: -42px; --spark-y: 18px"></i>
+        </div>
+
         <button id="pause-button" class="round-button pause-button" type="button" aria-label="一時停止">
           Ⅱ
         </button>
@@ -130,9 +193,9 @@
           class="round-button sound-button"
           type="button"
           aria-label="音を切り替える"
-          aria-pressed="true"
+          aria-pressed="false"
         >
-          ♪
+          ×
         </button>
 
         <div id="joystick" class="joystick" aria-hidden="true">
@@ -184,7 +247,7 @@
           </p>
 
           <div id="result-best-score" class="best-score-note">
-            <span>自己ベスト</span>
+            <span id="result-best-score-label">端末の自己ベスト</span>
             <strong id="result-best-score-value">------</strong>
           </div>
 
@@ -203,7 +266,18 @@
             </div>
           </dl>
 
-          <p id="result-mode" class="result-mode">SP標準：1地点につきゴリラ5体</p>
+          <p id="result-mode" class="result-mode">
+            共通ルール・SP描画：ゲーム条件は全端末共通
+          </p>
+
+          <p
+            id="ranking-status"
+            class="ranking-status"
+            role="status"
+            aria-live="polite"
+          >
+            結果はゲーム終了時にランキングへ自動送信します。
+          </p>
 
           <div class="result-actions">
             <button id="replay-button" class="primary-button" type="button">
@@ -212,6 +286,17 @@
             <button id="share-button" class="secondary-button" type="button">
               結果をシェア
             </button>
+            <button id="result-home-button" class="secondary-button" type="button">
+              ゲーム終了
+            </button>
+            <a
+              id="result-lab-link"
+              class="secondary-button action-link"
+              href="https://chameleonjp.codeberg.page/chameleonjp_lab/"
+              aria-disabled="true"
+            >
+              他のゲームで遊ぶ
+            </a>
           </div>
         </section>
       </main>
@@ -219,8 +304,8 @@
       <div id="webgl-error" class="fatal-error" role="alert" hidden>
         <div>
           <span aria-hidden="true">🦍</span>
-          <h2>3D画面を開けませんでした</h2>
-          <p>
+          <h2 id="webgl-error-title">3D画面を開けませんでした</h2>
+          <p id="webgl-error-message">
             WebGLが使える最新のSafari、Chrome、Edgeで開き直してください。
           </p>
         </div>

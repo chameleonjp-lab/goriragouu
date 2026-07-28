@@ -22,6 +22,7 @@ import {
   PLAYER_SPEED,
   ROCK_MODEL_RADIUS,
   ROCK_SLOW_MULTIPLIER,
+  SCORE_PER_BANANA,
   STORM_FALL_SECONDS,
   STORM_INTERVAL_MIN_FACTOR,
   STORM_MIN_CLEARANCE,
@@ -129,12 +130,25 @@ test("スコアは生存時間とバナナの両方を加点する", () => {
   assert.equal(formatScore(-10), "000000");
 });
 
-test("PCはSPよりゴリラと雨を増やすが、地点段階は共通", () => {
+test("PCとSPはランキング条件を共有し、PCは描画だけを増やす", () => {
   const sp = getDeviceProfile(true);
   const pc = getDeviceProfile(false);
-  assert.equal(sp.gorillasPerStorm, 5);
-  assert.equal(pc.gorillasPerStorm, 7);
+
+  for (const key of [
+    "gorillasPerStorm",
+    "regularMaxGorillas",
+    "maxGorillas",
+    "stormInterval",
+    "treeCount",
+    "rockCount",
+  ]) {
+    assert.equal(pc[key], sp[key], `${key} は端末間で同じ条件が必要です`);
+  }
+
   assert.ok(pc.rainDropsPerStorm > sp.rainDropsPerStorm);
+  assert.ok(pc.maxPixelRatio > sp.maxPixelRatio);
+  assert.equal(sp.realShadows, false);
+  assert.equal(pc.realShadows, true);
   assert.equal(getStage(0).stormLocations, 1);
   assert.equal(getStage(30).stormLocations, 2);
   assert.equal(getStage(50).stormLocations, 3);
@@ -152,7 +166,7 @@ test("直進対策専用のゴリラ枠は通常枠から分離する", () => {
     );
   }
   assert.equal(getDeviceProfile(true).regularMaxGorillas, 45);
-  assert.equal(getDeviceProfile(false).regularMaxGorillas, 63);
+  assert.equal(getDeviceProfile(false).regularMaxGorillas, 45);
 });
 
 test("木と石の接触半径は表示サイズに合わせ、石は速度を75%にする", () => {
@@ -624,6 +638,104 @@ test("HTMLのIDは重複せず、JavaScriptが参照する画面部品が存在�
   }
 });
 
+test("揺れと音は初期状態で無効になり、バナナ取得は+100を粒で示す", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const game = await readFile(new URL("../src/game.js", import.meta.url), "utf8");
+  const css = await readFile(new URL("../styles.css", import.meta.url), "utf8");
+
+  assert.equal(SCORE_PER_BANANA, 100);
+  assert.match(
+    html,
+    /id="motion-button"[\s\S]*?aria-pressed="false"[\s\S]*?揺れ：なし/,
+  );
+  assert.match(
+    html,
+    /id="home-sound-button"[\s\S]*?aria-pressed="false"[\s\S]*?音：なし/,
+  );
+  assert.match(
+    game,
+    /safeStorageGet\("goriragouu-sound", "off"\) === "on"/,
+  );
+  assert.match(
+    game,
+    /safeStorageGet\("goriragouu-motion", "off"\) === "on"/,
+  );
+
+  const effectMarkup = html.slice(
+    html.indexOf('id="banana-score-fx"'),
+    html.indexOf('id="pause-button"'),
+  );
+  assert.match(effectMarkup, /<strong>\+100<\/strong>/);
+  assert.equal((effectMarkup.match(/<i style=/g) || []).length, 8);
+  assert.match(game, /this\.showBananaScoreEffect\(\)/);
+  assert.match(
+    game,
+    /scoreText\.textContent = `\+\$\{SCORE_PER_BANANA\}`/,
+  );
+  assert.match(css, /@keyframes banana-score-pop/);
+  assert.match(css, /@keyframes banana-score-spark/);
+  assert.match(
+    css,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.banana-score-fx\.active strong[\s\S]*?opacity:\s*1/,
+  );
+});
+
+test("プレイヤーは紫系の服を着て、実験場ランキングへ1回だけ自動送信する", async () => {
+  const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const game = await readFile(new URL("../src/game.js", import.meta.url), "utf8");
+
+  for (const id of [
+    "player-name-input",
+    "player-name-message",
+    "ranking-status",
+    "home-share-button",
+    "home-lab-link",
+    "result-home-button",
+    "result-lab-link",
+    "webgl-error-title",
+    "webgl-error-message",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /maxlength="10"/);
+  assert.match(html, /user-scalable=no/);
+  assert.match(
+    html,
+    /https:\/\/chameleonjp\.codeberg\.page\/chameleonjp_lab\//,
+  );
+
+  assert.match(game, /const GAME_SLUG = "goriragouu"/);
+  assert.match(game, /const CLIENT_VERSION = "goriragouu_v20260728_01"/);
+  assert.match(
+    game,
+    /const GAME_URL = "https:\/\/chameleonjp-lab\.github\.io\/goriragouu\/"/,
+  );
+  assert.match(game, /supabase-js@2\.110\.9\/\+esm/);
+  assert.match(game, /\.rpc\("submit_score"/);
+  assert.match(game, /result\.accepted !== true/);
+  assert.match(game, /this\.scoreSubmitAttempted = true/);
+  assert.match(game, /this\.setLabNavigationLocked\(true\)/);
+  assert.match(game, /this\.setLabNavigationLocked\(false\)/);
+  assert.doesNotMatch(game, /service_role|sb_secret_/i);
+  assert.doesNotMatch(game, /window\.location\.href/);
+
+  const finishMethod = game.slice(
+    game.indexOf("  finishGame(cleared) {"),
+    game.indexOf("  async shareGame() {"),
+  );
+  assert.match(
+    finishMethod,
+    /void this\.submitGameScore\(score, this\.scoreSubmissionRunId\)/,
+  );
+  assert.equal(
+    (finishMethod.match(/submitGameScore\(/g) || []).length,
+    1,
+  );
+
+  assert.match(game, /color: 0x8b5cf6/);
+  assert.match(game, /color: 0x4c1d95/);
+});
+
 test("Three.jsは固定版を使い、描画上限と使い回し用クラスを備える", async () => {
   const game = await readFile(new URL("../src/game.js", import.meta.url), "utf8");
   assert.match(game, /three@0\.185\.1\/build\/three\.module\.min\.js/);
@@ -740,4 +852,20 @@ test("停止画面の読み上げと安全なPages公開条件を備える", asy
   assert.match(pages, /needs: test/);
   assert.match(pages, /if: github\.ref == 'refs\/heads\/main'/);
   assert.match(pages, /deploy:[\s\S]*permissions:[\s\S]*pages: write/);
+});
+
+test("WebGLコンテキスト消失中は進行を止め、復旧後に再開準備する", async () => {
+  const game = await readFile(new URL("../src/game.js", import.meta.url), "utf8");
+  assert.match(game, /addEventListener\(\s*"webglcontextlost"/);
+  assert.match(game, /addEventListener\(\s*"webglcontextrestored"/);
+  assert.match(game, /handleWebGLContextLost\(event\)/);
+  assert.match(game, /event\.preventDefault\(\)/);
+  assert.match(game, /this\.mode = "context-lost"/);
+  assert.match(
+    game,
+    /if \(this\.webglContextLost\) \{\s*this\.lastFrameAt = timeMs;\s*return;/,
+  );
+  assert.match(game, /this\.accumulator = 0/);
+  assert.match(game, /this\.resumeGame\(\)/);
+  assert.match(game, /startNewGame\(\) \{\s*if \(this\.webglContextLost\) return;/);
 });
