@@ -3,6 +3,13 @@ import {
   BANANA_RESPAWN_DELAY_SECONDS,
   BASE_GAME_SECONDS,
   BOOST_MULTIPLIER,
+  FALLING_GORILLA_MAX_REACH,
+  FALLING_GORILLA_PARTS,
+  ORBITAL_FALLER_HEIGHT_MAX,
+  ORBITAL_FALLER_HEIGHT_MIN,
+  ORBITAL_FALLER_LOW,
+  ORBITAL_FALLER_SCALE_MAX,
+  ORBITAL_FALLER_SCALE_MIN,
   PLAYER_SPEED,
   bananasUntilBonus,
   calculateScore,
@@ -99,20 +106,17 @@ const LOWLAND_ELEVATION = 0.52;
 // with PLANET_RADIUS the same way HOME_ORBIT_* does below.
 const ORBITAL_CLOUD_SHELL_MIN = PLANET_RADIUS + 9;
 const ORBITAL_CLOUD_SHELL_MAX = PLANET_RADIUS + 15;
-const ORBITAL_FALLER_HEIGHT_MIN = 9;
-const ORBITAL_FALLER_HEIGHT_MAX = 15;
 // Fallers recycle back to the cloud shell well above the true maximum
 // terrain radius (PLANET_RADIUS) and above the tallest tree crowns (trees
 // top out around 3.4 units), so a clear gap of open air always separates a
 // faller from the ground -- nothing ever reads as sitting on or embedded in
 // the surface, unlike the old near-zero cutoff that let large silhouettes
-// dip into hills. Raised from 5 to keep a clear gap under the bigger bodies
-// (bodyScale now goes up to 6.5, versus the 4.2 this was originally tuned for).
-const ORBITAL_FALLER_LOW = 6;
-// During gameplay, fallers whose surface normal sits within this cone of the
-// player's own "up" are culled so the ambient rain never overlaps the
-// playfield or reads as a real threat -- only far-side/near-horizon fallers
-// stay visible, matching "distant weather beyond the horizon".
+// dip into hills. The low point and model scale live beside the shared
+// silhouette in rules.js so their clearance is protected by a pure test.
+// Fallers whose surface normal sits within this cone of the current viewing
+// direction are culled so the ambient rain never overlaps the visible planet
+// face or reads as a real threat. Gameplay uses the player's own "up";
+// home/result use the orbit camera direction.
 const ORBITAL_NEAR_SIDE_DOT = 0.3;
 // The home/result screens orbit the whole planet from outside, so unlike the
 // gameplay chase camera these distances scale with PLANET_RADIUS to keep the
@@ -914,7 +918,7 @@ class StormCell {
     this.splash.visible = false;
     this.group.add(this.splash);
 
-    this.fallingPartsPerGorilla = 4;
+    this.fallingPartsPerGorilla = FALLING_GORILLA_PARTS.length;
     this.fallingOffsets = Array.from(
       { length: profile.gorillasPerStorm },
       () => ({ x: 0, z: 0, phase: 0, delay: 0 }),
@@ -923,6 +927,12 @@ class StormCell {
       shared.fallingGeometry,
       shared.fallingMaterial,
       profile.gorillasPerStorm * this.fallingPartsPerGorilla,
+    );
+    this.fallingGorillas.instanceColor = new THREE.InstancedBufferAttribute(
+      new Float32Array(
+        profile.gorillasPerStorm * this.fallingPartsPerGorilla * 3,
+      ),
+      3,
     );
     this.fallingGorillas.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.fallingGorillas.frustumCulled = false;
@@ -940,6 +950,9 @@ class StormCell {
     this.fallQuaternion = new THREE.Quaternion();
     this.fallPartQuaternion = new THREE.Quaternion();
     this.fallEuler = new THREE.Euler();
+    this.fallPartEuler = new THREE.Euler();
+    this.fallBrownColor = new THREE.Color(0x3e2c28);
+    this.fallTanColor = new THREE.Color(0x9f7456);
   }
 
   activate(normal, time, random) {
@@ -1045,11 +1058,8 @@ class StormCell {
         1,
       );
       const eased = progress * progress;
-      this.fallPosition.set(
-        offset.x,
-        6.1 - eased * 5.55,
-        offset.z,
-      );
+      const impactHeight = FALLING_GORILLA_MAX_REACH + 0.12;
+      this.fallPosition.set(offset.x, 6.1 - eased * (6.1 - impactHeight), offset.z);
       this.fallEuler.set(
         offset.phase + rainAge * 3.2,
         offset.phase * 0.7 + rainAge * 2.4,
@@ -1062,56 +1072,30 @@ class StormCell {
         this.fallUnitScale,
       );
 
-      instanceIndex = this.setFallingPart(
-        instanceIndex,
-        0,
-        0,
-        0,
-        0.72,
-        0.78,
-        0.54,
-      );
-      instanceIndex = this.setFallingPart(
-        instanceIndex,
-        0,
-        0.64,
-        -0.02,
-        0.5,
-        0.48,
-        0.48,
-      );
-      instanceIndex = this.setFallingPart(
-        instanceIndex,
-        -0.55,
-        0.02,
-        0,
-        0.24,
-        0.82,
-        0.26,
-      );
-      instanceIndex = this.setFallingPart(
-        instanceIndex,
-        0.55,
-        0.02,
-        0,
-        0.24,
-        0.82,
-        0.26,
-      );
+      for (const part of FALLING_GORILLA_PARTS) {
+        instanceIndex = this.setFallingPart(instanceIndex, part);
+      }
     }
     this.fallingGorillas.instanceMatrix.needsUpdate = true;
+    this.fallingGorillas.instanceColor.needsUpdate = true;
   }
 
-  setFallingPart(index, x, y, z, sx, sy, sz) {
-    this.fallPosition.set(x, y, z);
-    this.fallScale.set(sx, sy, sz);
+  setFallingPart(index, part) {
+    this.fallPosition.set(part.x, part.y, part.z);
+    this.fallScale.set(part.sx, part.sy, part.sz);
+    this.fallPartEuler.set(part.rx, part.ry, part.rz);
+    this.fallPartQuaternion.setFromEuler(this.fallPartEuler);
     this.fallLocal.compose(
       this.fallPosition,
-      this.fallPartQuaternion.identity(),
+      this.fallPartQuaternion,
       this.fallScale,
     );
     this.fallWorld.multiplyMatrices(this.fallRoot, this.fallLocal);
     this.fallingGorillas.setMatrixAt(index, this.fallWorld);
+    this.fallingGorillas.setColorAt(
+      index,
+      part.tone === "tan" ? this.fallTanColor : this.fallBrownColor,
+    );
     return index + 1;
   }
 }
@@ -1139,7 +1123,7 @@ function orbitalHash(n) {
 class OrbitalRain {
   constructor(scene, cloudCount, fallerCount, random) {
     this.fallerCount = fallerCount;
-    this.partsPerFaller = 3;
+    this.partsPerFaller = FALLING_GORILLA_PARTS.length;
 
     this.cloudGroup = new THREE.Group();
     scene.add(this.cloudGroup);
@@ -1225,22 +1209,22 @@ class OrbitalRain {
       this.phase[index] = random.range(0, 400);
       this.tumbleSeed[index] = random.range(0, Math.PI * 2);
       this.tumbleSpeed[index] = random.range(1.4, 3);
-      // Scaled way up from the original 0.75-1.25 (and again from an
-      // intermediate 2.8-4.2) -- at orbital camera distance anything smaller
-      // reads as a speck, not a body. Fewer, larger, clearly-readable
-      // fallers beat a cloud of small ones, so the size increase here is
-      // paired with a lower ambientFallerCount in getDeviceProfile. Kept
-      // under ~6.5 (rather than pushing further) so two fallers on nearby
-      // orbits don't visually merge into one illegible dark mass.
-      this.bodyScale[index] = random.range(4.5, 6.5);
+      // The old three-box silhouette needed an extreme scale to stay legible.
+      // The shared eight-part outline is readable at a smaller scale, which
+      // also leaves a verifiable air gap above the planet at the recycle point.
+      this.bodyScale[index] = random.range(
+        ORBITAL_FALLER_SCALE_MIN,
+        ORBITAL_FALLER_SCALE_MAX,
+      );
     }
 
     this.normal = new THREE.Vector3();
     this.position = new THREE.Vector3();
-    this.identityQuaternion = new THREE.Quaternion();
+    this.partQuaternion = new THREE.Quaternion();
     this.rootQuaternion = new THREE.Quaternion();
     this.tumbleQuaternion = new THREE.Quaternion();
     this.tumbleEuler = new THREE.Euler();
+    this.partEuler = new THREE.Euler();
     this.unitScale = new THREE.Vector3(1, 1, 1);
     this.bodyMatrix = new THREE.Matrix4();
     this.localMatrix = new THREE.Matrix4();
@@ -1313,7 +1297,7 @@ class OrbitalRain {
     this.clouds.instanceColor.needsUpdate = true;
   }
 
-  updateFallers(time, playerNormal, cullNearSide) {
+  updateFallers(time, cullNormal) {
     let instanceIndex = 0;
     for (let index = 0; index < this.fallerCount; index += 1) {
       const totalDistance = this.startHeight[index] - ORBITAL_FALLER_LOW;
@@ -1344,7 +1328,11 @@ class OrbitalRain {
       const radiusXZ = Math.sqrt(Math.max(0, 1 - y * y));
       this.normal.set(Math.cos(angle) * radiusXZ, y, Math.sin(angle) * radiusXZ);
 
-      if (cullNearSide && this.normal.dot(playerNormal) > ORBITAL_NEAR_SIDE_DOT) {
+      // Never draw decorative fallers over the near face of the planet.
+      // During play cullNormal follows the player; on home/result it follows
+      // the orbit camera. Far-side fallers remain visible beyond the limb,
+      // but cannot masquerade as objects stuck to the ground.
+      if (this.normal.dot(cullNormal) > ORBITAL_NEAR_SIDE_DOT) {
         continue;
       }
 
@@ -1360,50 +1348,26 @@ class OrbitalRain {
       this.bodyMatrix.compose(this.position, this.rootQuaternion, this.unitScale);
 
       const size = this.bodyScale[index];
-      // Body and the limb bar stay the same gorilla brown as GorillaRenderer;
-      // the head gets the tan accent so each faller reads as a brown body
-      // with a lighter marking, the same brown+tan family as the real
-      // gorillas, instead of one flat silhouette.
-      instanceIndex = this.setPart(
-        instanceIndex,
-        this.brownColor,
-        0,
-        0,
-        0,
-        0.62 * size,
-        0.78 * size,
-        0.46 * size,
-      );
-      instanceIndex = this.setPart(
-        instanceIndex,
-        this.tanColor,
-        0,
-        0.58 * size,
-        -0.03,
-        0.4 * size,
-        0.38 * size,
-        0.38 * size,
-      );
-      instanceIndex = this.setPart(
-        instanceIndex,
-        this.brownColor,
-        0,
-        0.08 * size,
-        0,
-        1.2 * size,
-        0.2 * size,
-        0.22 * size,
-      );
+      for (const part of FALLING_GORILLA_PARTS) {
+        instanceIndex = this.setPart(
+          instanceIndex,
+          part.tone === "tan" ? this.tanColor : this.brownColor,
+          part,
+          size,
+        );
+      }
     }
     this.fallers.count = instanceIndex;
     this.fallers.instanceMatrix.needsUpdate = true;
     this.fallers.instanceColor.needsUpdate = true;
   }
 
-  setPart(index, color, x, y, z, sx, sy, sz) {
-    this.partPosition.set(x, y, z);
-    this.partScale.set(sx, sy, sz);
-    this.localMatrix.compose(this.partPosition, this.identityQuaternion, this.partScale);
+  setPart(index, color, part, size) {
+    this.partPosition.set(part.x * size, part.y * size, part.z * size);
+    this.partScale.set(part.sx * size, part.sy * size, part.sz * size);
+    this.partEuler.set(part.rx, part.ry, part.rz);
+    this.partQuaternion.setFromEuler(this.partEuler);
+    this.localMatrix.compose(this.partPosition, this.partQuaternion, this.partScale);
     this.worldMatrix.multiplyMatrices(this.bodyMatrix, this.localMatrix);
     this.fallers.setMatrixAt(index, this.worldMatrix);
     this.fallers.setColorAt(index, color);
@@ -1463,6 +1427,7 @@ class GorillaRainGame {
     this.tempA = new THREE.Vector3();
     this.tempB = new THREE.Vector3();
     this.tempC = new THREE.Vector3();
+    this.orbitalViewNormal = new THREE.Vector3();
     this.tempQuaternion = new THREE.Quaternion();
     this.tempMatrix = new THREE.Matrix4();
 
@@ -2028,9 +1993,11 @@ class GorillaRainGame {
       }),
       fallingGeometry: new THREE.BoxGeometry(1, 1, 1),
       fallingMaterial: new THREE.MeshStandardMaterial({
-        color: 0x4a332d,
+        color: 0xffffff,
         roughness: 0.92,
         metalness: 0,
+        emissive: 0x241812,
+        emissiveIntensity: 0.65,
       }),
       splashGeometry: new THREE.RingGeometry(0.65, 2.1, 28),
       splashMaterial: new THREE.MeshBasicMaterial({
@@ -2717,11 +2684,19 @@ class GorillaRainGame {
     const orbitalMotionScale = this.motionEnabled ? 1 : 0.15;
     this.orbitalRain.cloudGroup.rotation.y += delta * 0.006 * orbitalMotionScale;
     const orbitalTime = this.ambientTime * orbitalMotionScale;
-    // Only cull near-side fallers during actual gameplay states -- home and
-    // result orbit the whole planet and should show the full ring.
-    const cullOrbitalNearSide =
+    // The gameplay camera follows the player's patch; the home/result camera
+    // orbits the whole globe. In either case decorative fallers are limited to
+    // the horizon/far side so none project onto the ground as false threats.
+    const usePlayerCullNormal =
       this.mode === "playing" || this.mode === "countdown" || this.mode === "paused";
-    this.orbitalRain.updateFallers(orbitalTime, this.playerNormal, cullOrbitalNearSide);
+    if (usePlayerCullNormal) {
+      this.orbitalRain.updateFallers(orbitalTime, this.playerNormal);
+    } else {
+      this.orbitalRain.updateFallers(
+        orbitalTime,
+        this.orbitalViewNormal.copy(this.camera.position).normalize(),
+      );
+    }
 
     this.skyMaterial.uniforms.uTime.value = this.ambientTime;
 
