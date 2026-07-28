@@ -569,8 +569,8 @@ export function getGorillaSpeedRange(elapsedSeconds) {
 export function getDeviceProfile(isMobile) {
   if (isMobile) {
     return Object.freeze({
-      id: "sp-standard",
-      label: "SP標準",
+      id: "shared-rules-sp-render",
+      label: "共通ルール・SP描画",
       gorillasPerStorm: 5,
       // At the shortest interval, three final-stage waves can still be inside
       // their five-second chase window: 3 waves * 3 locations * 5 gorillas.
@@ -596,16 +596,18 @@ export function getDeviceProfile(isMobile) {
   }
 
   return Object.freeze({
-    id: "pc-crowd",
-    label: "PC多群",
-    gorillasPerStorm: 7,
-    regularMaxGorillas: 63,
-    maxGorillas: 70,
-    stormInterval: 5.2,
+    id: "shared-rules-pc-render",
+    label: "共通ルール・PC描画",
+    // Rankings use one slug, so gameplay-affecting values must match the
+    // smartphone profile. PC can spend its extra budget on rendering only.
+    gorillasPerStorm: 5,
+    regularMaxGorillas: 45,
+    maxGorillas: 50,
+    stormInterval: 5.8,
     rainDropsPerStorm: 760,
     maxPixelRatio: 1.6,
-    treeCount: 120,
-    rockCount: 85,
+    treeCount: 72,
+    rockCount: 56,
     realShadows: true,
     ambientCloudCount: 24,
     ambientFallerCount: 10,
