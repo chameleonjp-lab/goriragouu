@@ -12,6 +12,136 @@ export const SCORE_PER_BANANA = 100;
 export const PLAYER_SPEED = 5.2;
 export const BOOST_MULTIPLIER = 1.52;
 
+// Falling gorillas share one readable low-poly silhouette in both the real
+// storm and the planet-scale ambient rain. Keeping the layout as plain data
+// lets tests protect the recognisable head/muzzle/long-arm/leg outline without
+// needing a WebGL context.
+export const FALLING_GORILLA_PARTS = Object.freeze(
+  [
+    {
+      name: "torso",
+      tone: "brown",
+      x: 0,
+      y: 0.04,
+      z: 0.04,
+      rx: 0,
+      ry: 0,
+      rz: 0,
+      sx: 0.88,
+      sy: 0.9,
+      sz: 0.64,
+    },
+    {
+      name: "head",
+      tone: "brown",
+      x: 0,
+      y: 0.78,
+      z: -0.06,
+      rx: 0,
+      ry: 0,
+      rz: 0,
+      sx: 0.62,
+      sy: 0.56,
+      sz: 0.58,
+    },
+    {
+      name: "muzzle",
+      tone: "tan",
+      x: 0,
+      y: 0.67,
+      z: -0.38,
+      rx: 0,
+      ry: 0,
+      rz: 0,
+      sx: 0.42,
+      sy: 0.25,
+      sz: 0.2,
+    },
+    {
+      name: "chest",
+      tone: "tan",
+      x: 0,
+      y: 0.08,
+      z: -0.34,
+      rx: 0,
+      ry: 0,
+      rz: 0,
+      sx: 0.56,
+      sy: 0.52,
+      sz: 0.12,
+    },
+    {
+      name: "left-arm",
+      tone: "brown",
+      x: -0.7,
+      y: -0.03,
+      z: 0,
+      rx: 0.05,
+      ry: 0,
+      rz: 0.28,
+      sx: 0.34,
+      sy: 1.08,
+      sz: 0.4,
+    },
+    {
+      name: "right-arm",
+      tone: "brown",
+      x: 0.7,
+      y: -0.03,
+      z: 0,
+      rx: -0.05,
+      ry: 0,
+      rz: -0.28,
+      sx: 0.34,
+      sy: 1.08,
+      sz: 0.4,
+    },
+    {
+      name: "left-leg",
+      tone: "brown",
+      x: -0.32,
+      y: -0.69,
+      z: 0.08,
+      rx: 0.12,
+      ry: 0,
+      rz: -0.08,
+      sx: 0.38,
+      sy: 0.7,
+      sz: 0.46,
+    },
+    {
+      name: "right-leg",
+      tone: "brown",
+      x: 0.32,
+      y: -0.69,
+      z: 0.08,
+      rx: -0.12,
+      ry: 0,
+      rz: 0.08,
+      sx: 0.38,
+      sy: 0.7,
+      sz: 0.46,
+    },
+  ].map((part) => Object.freeze(part)),
+);
+
+export const FALLING_GORILLA_MAX_REACH = Math.max(
+  ...FALLING_GORILLA_PARTS.map(
+    (part) =>
+      Math.hypot(part.x, part.y, part.z) +
+      Math.hypot(part.sx, part.sy, part.sz) / 2,
+  ),
+);
+
+// Ambient fallers recycle before their conservative bounding sphere can
+// touch the planet. The explicit values are exported so that geometry edits
+// cannot silently reintroduce the old "gorilla stuck on the surface" look.
+export const ORBITAL_FALLER_HEIGHT_MIN = 10;
+export const ORBITAL_FALLER_HEIGHT_MAX = 15;
+export const ORBITAL_FALLER_LOW = 7.5;
+export const ORBITAL_FALLER_SCALE_MIN = 3.2;
+export const ORBITAL_FALLER_SCALE_MAX = 4;
+
 export const STAGES = Object.freeze([
   Object.freeze({
     index: 0,

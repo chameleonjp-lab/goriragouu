@@ -8,7 +8,12 @@ import {
   BANANA_MIN_SURFACE_DISTANCE,
   BASE_GAME_SECONDS,
   BOOST_MULTIPLIER,
+  FALLING_GORILLA_MAX_REACH,
+  FALLING_GORILLA_PARTS,
   GORILLA_SPEED_MAX_EARLY,
+  ORBITAL_FALLER_HEIGHT_MIN,
+  ORBITAL_FALLER_LOW,
+  ORBITAL_FALLER_SCALE_MAX,
   PLAYER_SPEED,
   STORM_INTERVAL_MIN_FACTOR,
   STORM_MIN_CLEARANCE,
@@ -99,6 +104,44 @@ test("PCはSPよりゴリラと雨を増やすが、地点段階は共通", () =
   assert.equal(getStage(0).stormLocations, 1);
   assert.equal(getStage(30).stormLocations, 2);
   assert.equal(getStage(50).stormLocations, 3);
+});
+
+test("降下ゴリラは顔・長い腕・左右の脚が分かる共通造形を使う", () => {
+  const names = new Set(FALLING_GORILLA_PARTS.map((part) => part.name));
+  for (const required of [
+    "torso",
+    "head",
+    "muzzle",
+    "chest",
+    "left-arm",
+    "right-arm",
+    "left-leg",
+    "right-leg",
+  ]) {
+    assert.ok(names.has(required), `${required} が降下ゴリラに必要です`);
+  }
+  assert.ok(FALLING_GORILLA_PARTS.length >= 8);
+
+  const leftArm = FALLING_GORILLA_PARTS.find((part) => part.name === "left-arm");
+  const rightArm = FALLING_GORILLA_PARTS.find((part) => part.name === "right-arm");
+  assert.equal(leftArm.x, -rightArm.x);
+  assert.equal(leftArm.rz, -rightArm.rz);
+  assert.ok(leftArm.sy > leftArm.sx * 2.5, "ゴリラらしい長い腕が必要です");
+});
+
+test("周囲を降るゴリラは最大サイズでも惑星表面へ届かない", () => {
+  const conservativeModelReach = Math.max(
+    ...FALLING_GORILLA_PARTS.map(
+      (part) =>
+        Math.hypot(part.x, part.y, part.z) +
+        Math.hypot(part.sx, part.sy, part.sz) / 2,
+    ),
+  );
+  const minimumAirGap =
+    ORBITAL_FALLER_LOW - FALLING_GORILLA_MAX_REACH * ORBITAL_FALLER_SCALE_MAX;
+  assert.ok(Math.abs(FALLING_GORILLA_MAX_REACH - conservativeModelReach) < 1e-12);
+  assert.ok(ORBITAL_FALLER_HEIGHT_MIN > ORBITAL_FALLER_LOW);
+  assert.ok(minimumAirGap >= 2, `地表との隙間が不足しています: ${minimumAirGap}`);
 });
 
 test("初期時間は60秒", () => {
@@ -222,6 +265,16 @@ test("Three.jsは固定版を使い、描画上限と使い回し用クラスを
   assert.match(game, /new THREE\.InstancedMesh/);
   assert.match(game, /new THREE\.Points/);
   assert.match(game, /MAX_FIXED_STEPS = 8/);
+  assert.match(
+    game,
+    /this\.fallingPartsPerGorilla = FALLING_GORILLA_PARTS\.length/,
+  );
+  assert.match(game, /this\.partsPerFaller = FALLING_GORILLA_PARTS\.length/);
+  assert.match(game, /this\.orbitalViewNormal = new THREE\.Vector3\(\)/);
+  assert.match(
+    game,
+    /this\.orbitalViewNormal\.copy\(this\.camera\.position\)\.normalize\(\)/,
+  );
 });
 
 test("ゲーム中のスマホ操作を抑えるCSSが揃っている", async () => {
