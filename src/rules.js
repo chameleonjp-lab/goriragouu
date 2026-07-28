@@ -241,7 +241,7 @@ export function getDeviceProfile(isMobile) {
       // deliberately modest -- a handful of large, legible falling bodies
       // reads better than a crowd of small ones.
       ambientCloudCount: 12,
-      ambientFallerCount: 10,
+      ambientFallerCount: 14,
     });
   }
 
@@ -257,6 +257,6 @@ export function getDeviceProfile(isMobile) {
     rockCount: 85,
     realShadows: true,
     ambientCloudCount: 24,
-    ambientFallerCount: 20,
+    ambientFallerCount: 10,
   });
 }
