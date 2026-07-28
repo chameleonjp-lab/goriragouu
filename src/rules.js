@@ -4,6 +4,11 @@ export const BOOST_SECONDS_PER_BANANA = 2;
 export const SCORE_PER_SECOND = 100;
 export const SCORE_PER_BANANA = 100;
 
+// The planet radius is shared by rendering and pure rule calculations. Keeping
+// one value prevents "one quarter of the map" and surface collision distances
+// from silently drifting away from the sphere the player actually runs on.
+export const PLANET_RADIUS = 30;
+
 // Player movement, mirrored 1:1 into game.js (which imports these rather than
 // redefining them) so the balance invariant below has a single source of
 // truth: unboosted PLAYER_SPEED is what late-game gorillas must exceed, and
@@ -11,6 +16,211 @@ export const SCORE_PER_BANANA = 100;
 // must always stay comfortably under.
 export const PLAYER_SPEED = 5.2;
 export const BOOST_MULTIPLIER = 1.52;
+
+// Terrain props now affect play instead of being visual-only. Rocks cut
+// movement to 75% while the player overlaps them; trees are solid. The model
+// radii match the geometry created in game.js and PLAYER_COLLISION_RADIUS
+// accounts for the avatar's roughly 0.86-unit-wide body.
+export const PLAYER_COLLISION_RADIUS = 0.63;
+export const TREE_TRUNK_MODEL_RADIUS = 0.22;
+export const TREE_COLLISION_MODEL_RADIUS = 0.68;
+export const ROCK_MODEL_RADIUS = 0.52;
+export const ROCK_SLOW_MULTIPLIER = 0.75;
+
+export function getTreeCollisionDistance(size) {
+  const safeSize = Number.isFinite(size) ? Math.max(0, size) : 0;
+  return PLAYER_COLLISION_RADIUS + TREE_COLLISION_MODEL_RADIUS * safeSize;
+}
+
+export function getRockContactDistance(size) {
+  const safeSize = Number.isFinite(size) ? Math.max(0, size) : 0;
+  return PLAYER_COLLISION_RADIUS + ROCK_MODEL_RADIUS * safeSize;
+}
+
+export function getSurfaceContactDot(
+  surfaceDistance,
+  planetRadius = PLANET_RADIUS,
+) {
+  const safeDistance = Number.isFinite(surfaceDistance)
+    ? Math.max(0, surfaceDistance)
+    : 0;
+  const safeRadius =
+    Number.isFinite(planetRadius) && planetRadius > 0
+      ? planetRadius
+      : PLANET_RADIUS;
+  return Math.cos(Math.min(Math.PI, safeDistance / safeRadius));
+}
+
+export function shouldBlockSurfaceObstacle(
+  currentDot,
+  candidateDot,
+  contactDot,
+) {
+  if (
+    !Number.isFinite(currentDot) ||
+    !Number.isFinite(candidateDot) ||
+    !Number.isFinite(contactDot) ||
+    candidateDot < contactDot
+  ) {
+    return false;
+  }
+  // Entry from outside, movement farther inward, and exact sideways contact
+  // are blocked. Any strictly outward step remains available, even when it is
+  // extremely small, so a mover can always escape an overlapping spawn.
+  return currentDot < contactDot || candidateDot >= currentDot;
+}
+
+export function getObstacleSlideScale(inwardAlignment) {
+  if (!Number.isFinite(inwardAlignment)) return 0;
+  if (inwardAlignment >= 0) return 1;
+  const clamped = Math.max(-1, inwardAlignment);
+  return Math.sqrt(Math.max(0, 1 - clamped * clamped));
+}
+
+export function getRockSpeedMultiplier(isTouchingRock) {
+  return isTouchingRock ? ROCK_SLOW_MULTIPLIER : 1;
+}
+
+export function isRockTopReachable(
+  groundRadius,
+  size,
+  heightScale,
+  playerSurfaceRadius,
+) {
+  if (
+    !Number.isFinite(groundRadius) ||
+    !Number.isFinite(size) ||
+    !Number.isFinite(heightScale) ||
+    !Number.isFinite(playerSurfaceRadius) ||
+    size <= 0 ||
+    heightScale <= 0
+  ) {
+    return false;
+  }
+  const centerRadius = groundRadius + size * 0.2;
+  const topRadius = centerRadius + ROCK_MODEL_RADIUS * size * heightScale;
+  return topRadius >= playerSurfaceRadius;
+}
+
+export function trySurfacePlacement(maxAttempts, placeCandidate, isBlocked) {
+  const attempts = Number.isFinite(maxAttempts)
+    ? Math.max(0, Math.floor(maxAttempts))
+    : 0;
+  if (
+    attempts === 0 ||
+    typeof placeCandidate !== "function" ||
+    typeof isBlocked !== "function"
+  ) {
+    return false;
+  }
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    placeCandidate(attempt);
+    if (!isBlocked(attempt)) return true;
+  }
+  return false;
+}
+
+// Holding approximately one great-circle heading for one quarter of the
+// planet circumference activates one extra storm in front of the player.
+// Normal stage counts and `nextStormAt` cadence remain independent.
+export const STRAIGHT_RUN_TRIGGER_DISTANCE = (Math.PI * PLANET_RADIUS) / 2;
+export const STRAIGHT_RUN_MAX_HEADING_DELTA = Math.PI / 8;
+export const STRAIGHT_RUN_IDLE_RESET_SECONDS = 0.45;
+export const STRAIGHT_STORM_DISTANCE_MIN = 18;
+export const STRAIGHT_STORM_DISTANCE_MAX = 20;
+export const STRAIGHT_STORM_LEAD_DISTANCE = 10;
+export const STRAIGHT_STORM_BEARING_JITTER = 0.08;
+export const STRAIGHT_STORM_GORILLA_RADIUS_MAX = 2.45;
+export const STRAIGHT_STORM_DANGER_DELAY_SECONDS = 0.38;
+export const STRAIGHT_STORM_CONTACT_DISTANCE = 1.12;
+export const STRAIGHT_STORM_SAFETY_MARGIN = 0.5;
+export const STORM_FALL_SECONDS = 1.25;
+export const STORM_SPAWN_DISTANCE_MIN = 9.5;
+export const STORM_SPAWN_DISTANCE_MAX = 13.5;
+export const STRAIGHT_STORM_MIN_REGULAR_CLEARANCE = 6;
+export const STRAIGHT_STORM_AVOIDANCE_DISTANCE_MAX = 28;
+
+export function getStormLifecycle(ageSeconds, rainAlreadyStarted) {
+  const age = Number.isFinite(ageSeconds) ? Math.max(0, ageSeconds) : 0;
+  return {
+    startRain: !rainAlreadyStarted,
+    impact: age >= STORM_FALL_SECONDS,
+  };
+}
+
+export function getStraightStormDistance(playerSpeed, fallSeconds) {
+  const safeSpeed = Number.isFinite(playerSpeed) ? Math.max(0, playerSpeed) : 0;
+  const safeFall = Number.isFinite(fallSeconds) ? Math.max(0, fallSeconds) : 0;
+  // A banana or rock boundary can change speed after the storm is selected.
+  // Always plan for the game's maximum possible player speed so that fixed
+  // seeds and momentary surface effects cannot turn this into an unavoidable
+  // spawn. The cluster still lands directly in the held route, forcing a turn.
+  const planningSpeed = Math.max(
+    safeSpeed,
+    PLAYER_SPEED * BOOST_MULTIPLIER,
+  );
+  return Math.min(
+    STRAIGHT_STORM_DISTANCE_MAX,
+    Math.max(
+      STRAIGHT_STORM_DISTANCE_MIN,
+      planningSpeed * safeFall + STRAIGHT_STORM_LEAD_DISTANCE,
+    ),
+  );
+}
+
+export function advanceStraightRun(
+  currentDistance,
+  stepDistance,
+  headingAlignment,
+  triggerDistance = STRAIGHT_RUN_TRIGGER_DISTANCE,
+  maxHeadingDelta = STRAIGHT_RUN_MAX_HEADING_DELTA,
+) {
+  const safeCurrent = Number.isFinite(currentDistance)
+    ? Math.max(0, currentDistance)
+    : 0;
+  const safeStep = Number.isFinite(stepDistance) ? Math.max(0, stepDistance) : 0;
+  const safeTrigger =
+    Number.isFinite(triggerDistance) && triggerDistance > 0
+      ? triggerDistance
+      : STRAIGHT_RUN_TRIGGER_DISTANCE;
+  const safeTurn =
+    Number.isFinite(maxHeadingDelta) && maxHeadingDelta >= 0
+      ? Math.min(Math.PI, maxHeadingDelta)
+      : STRAIGHT_RUN_MAX_HEADING_DELTA;
+  const aligned =
+    Number.isFinite(headingAlignment) &&
+    headingAlignment >= Math.cos(safeTurn);
+  const total = (aligned ? safeCurrent : 0) + safeStep;
+  const triggered = total >= safeTrigger;
+
+  return {
+    aligned,
+    triggered,
+    distance: triggered ? total % safeTrigger : total,
+  };
+}
+
+export function advanceStraightRunIdle(
+  currentDistance,
+  currentIdleSeconds,
+  stepSeconds,
+) {
+  const distance = Number.isFinite(currentDistance)
+    ? Math.max(0, currentDistance)
+    : 0;
+  const idleSeconds =
+    (Number.isFinite(currentIdleSeconds)
+      ? Math.max(0, currentIdleSeconds)
+      : 0) +
+    (Number.isFinite(stepSeconds) ? Math.max(0, stepSeconds) : 0);
+  const reset =
+    distance > 0 && idleSeconds >= STRAIGHT_RUN_IDLE_RESET_SECONDS;
+  return {
+    reset,
+    distance: reset ? 0 : distance,
+    idleSeconds: reset ? 0 : idleSeconds,
+  };
+}
 
 // Falling gorillas share one readable low-poly silhouette in both the real
 // storm and the planet-scale ambient rain. Keeping the layout as plain data
@@ -189,9 +399,15 @@ export function getRemainingSeconds(elapsedSeconds, bananaCount) {
   return Math.max(0, BASE_GAME_SECONDS + getBonusSeconds(bananaCount) - elapsed);
 }
 
+export const FIXED_STEP_SECONDS = 1 / 60;
+export const PLAYABLE_FRAME_DELTA_MAX = 0.5;
+export const MAX_FIXED_STEPS_PER_FRAME = Math.ceil(
+  PLAYABLE_FRAME_DELTA_MAX / FIXED_STEP_SECONDS,
+);
+
 export function getPlayableFrameDelta(measuredSeconds) {
   if (!Number.isFinite(measuredSeconds) || measuredSeconds <= 0) return 0;
-  if (measuredSeconds > 0.5) return 0;
+  if (measuredSeconds > PLAYABLE_FRAME_DELTA_MAX) return 0;
   return measuredSeconds;
 }
 
@@ -223,12 +439,10 @@ export function bananasUntilBonus(bananaCount) {
 // storm could never appear anywhere near the forward cone at all, which
 // made holding a straight heading a permanent safe lane -- nothing could
 // ever spawn in front of a player who simply kept running forward. That is
-// too strong a guarantee: fairness should come from having time to react,
-// not from a forbidden zone. ~0.3 rad (~17°) still guarantees a storm can
-// never spawn so close to dead-ahead that a reacting player has no room to
-// turn clear of it, while allowing storms to appear almost anywhere in the
-// player's path -- see STORM_WARNING_SECONDS in game.js for the reaction
-// window this trades on.
+// too strong a guarantee. Scheduled storms still retain a small ~0.3 rad
+// (~17°) clearance because they now begin falling without a ground marker.
+// The separate one-quarter-map countermeasure deliberately ignores this
+// clearance and appears in front after sustained straight travel.
 export const STORM_MIN_CLEARANCE = 0.3;
 // Small per-storm randomness applied after spreading storms across the
 // clear arc, so placement stays varied without ever violating clearance.
@@ -358,7 +572,13 @@ export function getDeviceProfile(isMobile) {
       id: "sp-standard",
       label: "SP標準",
       gorillasPerStorm: 5,
-      maxGorillas: 32,
+      // At the shortest interval, three final-stage waves can still be inside
+      // their five-second chase window: 3 waves * 3 locations * 5 gorillas.
+      regularMaxGorillas: 45,
+      // One additional storm can be created by the straight-run countermeasure.
+      // Reserve one full swarm so it does not silently lose gorillas when a
+      // normal late-game wave is still chasing the player.
+      maxGorillas: 50,
       stormInterval: 5.8,
       rainDropsPerStorm: 420,
       maxPixelRatio: 1.35,
@@ -379,7 +599,8 @@ export function getDeviceProfile(isMobile) {
     id: "pc-crowd",
     label: "PC多群",
     gorillasPerStorm: 7,
-    maxGorillas: 48,
+    regularMaxGorillas: 63,
+    maxGorillas: 70,
     stormInterval: 5.2,
     rainDropsPerStorm: 760,
     maxPixelRatio: 1.6,
