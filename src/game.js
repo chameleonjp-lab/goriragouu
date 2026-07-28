@@ -5,12 +5,29 @@ import {
   BOOST_MULTIPLIER,
   FALLING_GORILLA_MAX_REACH,
   FALLING_GORILLA_PARTS,
+  FIXED_STEP_SECONDS,
+  MAX_FIXED_STEPS_PER_FRAME,
   ORBITAL_FALLER_HEIGHT_MAX,
   ORBITAL_FALLER_HEIGHT_MIN,
   ORBITAL_FALLER_LOW,
   ORBITAL_FALLER_SCALE_MAX,
   ORBITAL_FALLER_SCALE_MIN,
+  PLANET_RADIUS,
   PLAYER_SPEED,
+  ROCK_MODEL_RADIUS,
+  ROCK_SLOW_MULTIPLIER,
+  STORM_FALL_SECONDS,
+  STORM_MIN_CLEARANCE,
+  STORM_SPAWN_DISTANCE_MAX,
+  STORM_SPAWN_DISTANCE_MIN,
+  STRAIGHT_STORM_AVOIDANCE_DISTANCE_MAX,
+  STRAIGHT_STORM_BEARING_JITTER,
+  STRAIGHT_STORM_CONTACT_DISTANCE,
+  STRAIGHT_STORM_DANGER_DELAY_SECONDS,
+  STRAIGHT_STORM_MIN_REGULAR_CLEARANCE,
+  TREE_TRUNK_MODEL_RADIUS,
+  advanceStraightRun,
+  advanceStraightRunIdle,
   bananasUntilBonus,
   calculateScore,
   extendBoost,
@@ -20,12 +37,22 @@ import {
   getBonusSeconds,
   getDeviceProfile,
   getGorillaSpeedRange,
+  getObstacleSlideScale,
   getPlayableFrameDelta,
   getRemainingSeconds,
+  getRockContactDistance,
+  getRockSpeedMultiplier,
   getStage,
+  getStraightStormDistance,
   getStormInterval,
+  getStormLifecycle,
+  getSurfaceContactDot,
+  getTreeCollisionDistance,
+  isRockTopReachable,
   pickBananaBearing,
   pickStormAngles,
+  shouldBlockSurfaceObstacle,
+  trySurfacePlacement,
 } from "./rules.js";
 
 let THREE;
@@ -47,8 +74,8 @@ try {
   throw error;
 }
 
-const FIXED_STEP = 1 / 60;
-const MAX_FIXED_STEPS = 8;
+const FIXED_STEP = FIXED_STEP_SECONDS;
+const MAX_FIXED_STEPS = MAX_FIXED_STEPS_PER_FRAME;
 const IS_COARSE_POINTER = window.matchMedia("(pointer: coarse)").matches;
 const HAS_FINE_POINTER = window.matchMedia(
   "(hover: hover) and (pointer: fine)",
@@ -59,19 +86,11 @@ const IS_MOBILE =
   FORCED_DEVICE === "sp" ||
   (FORCED_DEVICE !== "pc" && IS_COARSE_POINTER && !HAS_FINE_POINTER);
 const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
-const PLANET_RADIUS = 30;
 const PLAYER_HEIGHT = 0.05;
 const GORILLA_CHASE_SECONDS = 5;
-const GORILLA_CONTACT_DISTANCE = 1.12;
+const GORILLA_CONTACT_DISTANCE = STRAIGHT_STORM_CONTACT_DISTANCE;
 const BANANA_CONTACT_DISTANCE = 1.05;
-// Time from a storm's spawn to when its rain (and the gorilla swarm at
-// impact) begins, i.e. the player's window to notice the warning ring/cloud
-// and steer clear. Raised alongside shrinking STORM_MIN_CLEARANCE (see
-// rules.js) so storms that now appear near dead-ahead still leave enough
-// reaction time to turn away before the swarm lands -- fairness moves from
-// "never appears in front of you" to "you always have time to see it and
-// react."
-const STORM_WARNING_SECONDS = 2.2;
+const SURFACE_PLACEMENT_RETRY_SECONDS = 0.25;
 // A banana already placed stays put until collected, but the player keeps
 // moving -- so without this, a banana placed in-band would simply be left
 // behind a few seconds later and never seen again. Once a banana drifts
@@ -80,7 +99,12 @@ const STORM_WARNING_SECONDS = 2.2;
 // the whole run instead of just at spawn time. Comparing cosines avoids an
 // acos() call per banana per frame.
 const BANANA_LEASH_MIN_DOT = Math.cos(BANANA_MAX_SURFACE_DISTANCE / PLANET_RADIUS);
-const STORM_RAIN_SECONDS = 1.25;
+// There is deliberately no pre-impact marker or warning phase. The cloud,
+// rain, and falling gorillas appear together, then reach the surface after
+// this visible fall time.
+// With the old 2.2-second marker removed, ordinary random storms stay a little
+// farther from the player so the visible fall itself remains enough time to
+// turn. This changes placement distance, not their scheduled frequency.
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const ZERO_VECTOR = new THREE.Vector3();
 const COLOR_LAND_LIGHT = new THREE.Color(0x8fcf5c);
@@ -526,8 +550,10 @@ class VirtualStick {
 }
 
 class BananaField {
-  constructor(scene, random, maxCount = 16) {
+  constructor(scene, random, isBlocked, maxCount = 16) {
     this.random = random;
+    this.isBlocked =
+      typeof isBlocked === "function" ? isBlocked : () => false;
     this.maxCount = maxCount;
     this.items = Array.from({ length: maxCount }, (_, index) => ({
       index,
@@ -615,20 +641,32 @@ class BananaField {
   }
 
   place(item, playerNormal, playerFacing) {
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      // Bananas spawn within a reachable annulus of surface distance from
-      // the player, biased toward the direction the player is actually
-      // heading, rather than uniformly over the whole sphere -- near
-      // enough to be worth a detour, far enough to cost something.
-      const distance = getBananaSpawnDistance(this.random);
-      this.placeAtSurfaceDistance(item.normal, playerNormal, playerFacing, distance);
-      // Belt-and-suspenders: the band's minimum already keeps bananas off
-      // the player, but this guards against a degenerate (e.g. test-only)
-      // band configuration that could shrink to zero.
-      if (item.normal.distanceToSquared(playerNormal) > 0.045) break;
-    }
+    const placed = trySurfacePlacement(
+      24,
+      () => {
+        // Bananas spawn within a reachable annulus of surface distance from
+        // the player, biased toward the direction the player is actually
+        // heading, rather than uniformly over the whole sphere -- near
+        // enough to be worth a detour, far enough to cost something.
+        const distance = getBananaSpawnDistance(this.random);
+        this.placeAtSurfaceDistance(
+          item.normal,
+          playerNormal,
+          playerFacing,
+          distance,
+        );
+      },
+      () =>
+        // Belt-and-suspenders: the band's minimum already keeps bananas off
+        // the player, but this guards against a degenerate (e.g. test-only)
+        // band configuration that could shrink to zero.
+        item.normal.distanceToSquared(playerNormal) <= 0.045 ||
+        this.isBlocked(item.normal),
+    );
+    if (!placed) return false;
     item.spin = this.random.range(0, Math.PI * 2);
     item.phase = this.random.range(0, Math.PI * 2);
+    return true;
   }
 
   collect(playerNormal, time, targetCount) {
@@ -657,13 +695,18 @@ class BananaField {
         continue;
       }
       if (!item.active && time >= item.respawnAt) {
-        this.place(item, playerNormal, playerFacing);
-        item.active = true;
+        item.active = this.place(item, playerNormal, playerFacing);
+        if (!item.active) {
+          item.respawnAt = time + SURFACE_PLACEMENT_RETRY_SECONDS;
+        }
       } else if (item.active && item.normal.dot(playerNormal) < BANANA_LEASH_MIN_DOT) {
         // The player has moved on and left this banana behind (they never
         // move once placed); pull it back into the reachable band around
         // wherever the player is now instead of leaving it stranded.
-        this.place(item, playerNormal, playerFacing);
+        if (!this.place(item, playerNormal, playerFacing)) {
+          item.active = false;
+          item.respawnAt = time + SURFACE_PLACEMENT_RETRY_SECONDS;
+        }
       }
       if (!item.active) continue;
 
@@ -868,19 +911,6 @@ class StormCell {
     this.group.visible = false;
     scene.add(this.group);
 
-    const ringGeometry = new THREE.RingGeometry(2.1, 2.55, 40);
-    this.ringMaterial = new THREE.MeshBasicMaterial({
-      color: 0xffc84a,
-      transparent: true,
-      opacity: 0.64,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    this.ring = new THREE.Mesh(ringGeometry, this.ringMaterial);
-    this.ring.rotation.x = -Math.PI / 2;
-    this.ring.position.y = 0.035;
-    this.group.add(this.ring);
-
     this.cloud = new THREE.Group();
     this.cloud.position.y = 7.1;
     const cloudLayout = [
@@ -911,12 +941,6 @@ class StormCell {
     this.rain.frustumCulled = false;
     this.rain.visible = false;
     this.group.add(this.rain);
-
-    this.splash = new THREE.Mesh(shared.splashGeometry, shared.splashMaterial);
-    this.splash.rotation.x = -Math.PI / 2;
-    this.splash.position.y = 0.06;
-    this.splash.visible = false;
-    this.group.add(this.splash);
 
     this.fallingPartsPerGorilla = FALLING_GORILLA_PARTS.length;
     this.fallingOffsets = Array.from(
@@ -964,14 +988,11 @@ class StormCell {
     this.group.visible = true;
     this.group.position.copy(normal).multiplyScalar(PLANET_RADIUS + 0.01);
     this.group.quaternion.setFromUnitVectors(Y_AXIS, normal);
-    this.ring.visible = true;
-    this.ring.scale.setScalar(0.82);
-    this.ringMaterial.color.setHex(0xffc84a);
-    this.rain.visible = false;
-    this.splash.visible = false;
-    this.fallingGorillas.visible = false;
-    this.fallingGorillas.count = 0;
-    this.cloud.scale.setScalar(0.72);
+    this.rain.visible = true;
+    this.fallingGorillas.visible = true;
+    this.fallingGorillas.count =
+      this.profile.gorillasPerStorm * this.fallingPartsPerGorilla;
+    this.cloud.scale.setScalar(1);
 
     for (let index = 0; index < this.rainSeeds.length; index += 1) {
       const radius = Math.sqrt(random.next()) * 2.2;
@@ -999,7 +1020,6 @@ class StormCell {
     this.active = false;
     this.group.visible = false;
     this.rain.visible = false;
-    this.splash.visible = false;
     this.fallingGorillas.visible = false;
     this.fallingGorillas.count = 0;
   }
@@ -1009,26 +1029,16 @@ class StormCell {
     if (this.lastUpdateTime === time) return;
     this.lastUpdateTime = time;
     const age = time - this.startedAt;
-    const warningProgress = clamp(age / STORM_WARNING_SECONDS, 0, 1);
-    const pulse = 1 + Math.sin(age * 15) * 0.06;
-    this.ring.scale.setScalar((0.82 + warningProgress * 0.18) * pulse);
-    this.ringMaterial.opacity = 0.42 + Math.sin(age * 13) * 0.2;
-    this.cloud.scale.setScalar(0.72 + warningProgress * 0.28);
+    const lifecycle = getStormLifecycle(age, this.startedRain);
     this.cloud.rotation.y += 0.015;
 
-    if (age >= STORM_WARNING_SECONDS && !this.startedRain) {
+    if (lifecycle.startRain) {
       this.startedRain = true;
-      this.rain.visible = true;
-      this.splash.visible = true;
-      this.fallingGorillas.visible = true;
-      this.fallingGorillas.count =
-        this.profile.gorillasPerStorm * this.fallingPartsPerGorilla;
-      this.ringMaterial.color.setHex(0xff5b4d);
       callbacks.onRainStart(this);
     }
 
     if (this.startedRain) {
-      const rainAge = age - STORM_WARNING_SECONDS;
+      const rainAge = age;
       const positions = this.rainPositions;
       for (let index = 0; index < this.rainSeeds.length; index += 1) {
         const offset = index * 3 + 1;
@@ -1036,20 +1046,17 @@ class StormCell {
         positions[offset] = ((height % 6.2) + 6.2) % 6.2 + 0.2;
       }
       this.rainGeometry.attributes.position.needsUpdate = true;
-      const splashScale = 0.88 + Math.sin(rainAge * 19) * 0.12;
-      this.splash.scale.setScalar(splashScale);
-      this.splash.material.opacity = 0.26 + Math.sin(rainAge * 14) * 0.08;
       this.updateFallingGorillas(rainAge);
     }
 
-    if (age >= STORM_WARNING_SECONDS + STORM_RAIN_SECONDS) {
+    if (lifecycle.impact) {
       callbacks.onImpact(this);
       this.deactivate();
     }
   }
 
   updateFallingGorillas(rainAge) {
-    const overallProgress = clamp(rainAge / STORM_RAIN_SECONDS, 0, 1);
+    const overallProgress = clamp(rainAge / STORM_FALL_SECONDS, 0, 1);
     let instanceIndex = 0;
     for (const offset of this.fallingOffsets) {
       const progress = clamp(
@@ -1382,8 +1389,6 @@ class GorillaRainGame {
       this.profile.maxPixelRatio = Math.min(1, this.profile.maxPixelRatio);
       this.profile.rainDropsPerStorm = Math.min(260, this.profile.rainDropsPerStorm);
       this.profile.realShadows = false;
-      this.profile.treeCount = Math.min(18, this.profile.treeCount);
-      this.profile.rockCount = Math.min(14, this.profile.rockCount);
       this.profile.ambientCloudCount = Math.min(8, this.profile.ambientCloudCount);
       this.profile.ambientFallerCount = Math.min(8, this.profile.ambientFallerCount);
     }
@@ -1416,6 +1421,7 @@ class GorillaRainGame {
     this.hasFixedSeed = Number.isFinite(seedParam);
     this.seed = this.hasFixedSeed ? seedParam >>> 0 : Date.now() >>> 0;
     this.random = new SeededRandom(this.seed);
+    this.straightStormRandom = new SeededRandom(this.seed ^ 0x6a09e667);
 
     this.playerNormal = new THREE.Vector3(0, 1, 0);
     this.playerFacing = new THREE.Vector3(0, 0, -1);
@@ -1427,23 +1433,47 @@ class GorillaRainGame {
     this.tempA = new THREE.Vector3();
     this.tempB = new THREE.Vector3();
     this.tempC = new THREE.Vector3();
+    this.moveCandidate = new THREE.Vector3();
+    this.slideDirection = new THREE.Vector3();
+    this.obstacleAway = new THREE.Vector3();
+    this.travelHeading = new THREE.Vector3(0, 0, -1);
+    this.straightRunHeading = new THREE.Vector3(0, 0, -1);
+    this.straightStormCandidate = new THREE.Vector3();
+    this.straightStormBestCandidate = new THREE.Vector3();
+    this.regularStormBestCandidate = new THREE.Vector3();
     this.orbitalViewNormal = new THREE.Vector3();
     this.tempQuaternion = new THREE.Quaternion();
+    this.straightTransportQuaternion = new THREE.Quaternion();
     this.tempMatrix = new THREE.Matrix4();
+    this.treeObstacles = [];
+    this.rockSlowZones = [];
+    this.straightRunDistance = 0;
+    this.straightRunIdleSeconds = 0;
+    this.straightStormPending = false;
+    this.currentPlayerSurfaceSpeed = 0;
+    this.playerSpeedFactor = 0;
 
     this.gorillaPool = Array.from(
       { length: this.profile.maxGorillas },
-      (_, index) => ({
-        index,
-        active: false,
-        normal: new THREE.Vector3(),
-        forward: new THREE.Vector3(0, 0, -1),
-        bornAt: 0,
-        dangerAt: 0,
-        expiresAt: 0,
-        speed: 4.58,
-        phase: this.random.range(0, Math.PI * 2),
-      }),
+      (_, index) => {
+        const reservedForStraight =
+          index >= this.profile.regularMaxGorillas;
+        const phaseRandom = reservedForStraight
+          ? this.straightStormRandom
+          : this.random;
+        return {
+          index,
+          active: false,
+          reservedForStraight,
+          normal: new THREE.Vector3(),
+          forward: new THREE.Vector3(0, 0, -1),
+          bornAt: 0,
+          dangerAt: 0,
+          expiresAt: 0,
+          speed: 4.58,
+          phase: phaseRandom.range(0, Math.PI * 2),
+        };
+      },
     );
 
     this.initializeRenderer();
@@ -1452,7 +1482,11 @@ class GorillaRainGame {
     this.initializePlayer();
     this.initializeEffects();
 
-    this.bananaField = new BananaField(this.scene3d, this.random);
+    this.bananaField = new BananaField(
+      this.scene3d,
+      this.random,
+      (normal) => this.isTreeContact(normal),
+    );
     this.bananaField.reset(this.playerNormal, this.playerFacing);
     this.gorillaRenderer = new GorillaRenderer(
       this.scene3d,
@@ -1739,7 +1773,15 @@ class GorillaRainGame {
   }
 
   createDecorations() {
-    const trunkGeometry = new THREE.CylinderGeometry(0.16, 0.22, 0.95, 5);
+    this.treeObstacles.length = 0;
+    this.rockSlowZones.length = 0;
+
+    const trunkGeometry = new THREE.CylinderGeometry(
+      0.16,
+      TREE_TRUNK_MODEL_RADIUS,
+      0.95,
+      5,
+    );
     // Stouter than the radius-18 tuning (wider radius, less height) so trees
     // read as a solid silhouette instead of a thin needle at the bigger
     // PLANET_RADIUS=30 scale, where a thin cone can look like a dark spike
@@ -1748,10 +1790,14 @@ class GorillaRainGame {
     const trunkMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       roughness: 0.96,
+      transparent: true,
+      opacity: 0.78,
     });
     const crownMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       roughness: 0.94,
+      transparent: true,
+      opacity: 0.7,
     });
     const trunkMesh = new THREE.InstancedMesh(
       trunkGeometry,
@@ -1802,6 +1848,10 @@ class GorillaRainGame {
       // PLANET_RADIUS, or they float above/clip into basins wherever the
       // ground has been pushed inward.
       const base = this.groundRadius(normal);
+      this.treeObstacles.push({
+        normal: normal.clone(),
+        contactDot: getSurfaceContactDot(getTreeCollisionDistance(size)),
+      });
 
       position.copy(normal).multiplyScalar(base + 0.43 * size);
       scale.set(size, size, size);
@@ -1832,7 +1882,7 @@ class GorillaRainGame {
     crownTopMesh.instanceColor.needsUpdate = true;
     this.scene3d.add(trunkMesh, crownMesh, crownTopMesh);
 
-    const rockGeometry = new THREE.DodecahedronGeometry(0.52, 0);
+    const rockGeometry = new THREE.DodecahedronGeometry(ROCK_MODEL_RADIUS, 0);
     const rockMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       roughness: 0.98,
@@ -1855,8 +1905,26 @@ class GorillaRainGame {
         this.tempQuaternion.setFromAxisAngle(Y_AXIS, this.random.range(0, Math.PI * 2)),
       );
       const size = this.random.range(0.45, 1.15);
-      position.copy(normal).multiplyScalar(this.groundRadius(normal) + size * 0.2);
-      scale.set(size, size * this.random.range(0.6, 1), size);
+      const heightScale = this.random.range(0.6, 1);
+      const ground = this.groundRadius(normal);
+      // Deep terrain basins can hide a short rock completely below the
+      // player's feet. Such a rock remains visual scenery but must not create
+      // an invisible slow zone.
+      if (
+        isRockTopReachable(
+          ground,
+          size,
+          heightScale,
+          PLANET_RADIUS + PLAYER_HEIGHT,
+        )
+      ) {
+        this.rockSlowZones.push({
+          normal: normal.clone(),
+          contactDot: getSurfaceContactDot(getRockContactDistance(size)),
+        });
+      }
+      position.copy(normal).multiplyScalar(ground + size * 0.2);
+      scale.set(size, size * heightScale, size);
       matrix.compose(position, quaternion, scale);
       rocks.setMatrixAt(index, matrix);
       color.setHex(rockHues[Math.floor(this.random.next() * rockHues.length)]);
@@ -1999,22 +2067,22 @@ class GorillaRainGame {
         emissive: 0x241812,
         emissiveIntensity: 0.65,
       }),
-      splashGeometry: new THREE.RingGeometry(0.65, 2.1, 28),
-      splashMaterial: new THREE.MeshBasicMaterial({
-        color: 0xb5eef2,
-        transparent: true,
-        opacity: 0.3,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      }),
     };
   }
 
   createStormPool() {
-    this.stormPool = Array.from(
+    this.regularStormPool = Array.from(
       { length: 3 },
       () => new StormCell(this.scene3d, this.profile, this.sharedStorm),
     );
+    // The normal final-stage wave owns all three regular slots. The extra
+    // straight-run storm cannot consume any of them.
+    this.straightRunStorm = new StormCell(
+      this.scene3d,
+      this.profile,
+      this.sharedStorm,
+    );
+    this.stormPool = [...this.regularStormPool, this.straightRunStorm];
   }
 
   bindUI() {
@@ -2151,6 +2219,13 @@ class GorillaRainGame {
     this.playerNormal.set(0, 1, 0);
     this.playerFacing.set(0, 0, -1);
     this.viewForward.set(0, 0, -1);
+    this.straightRunHeading.set(0, 0, -1);
+    this.travelHeading.set(0, 0, -1);
+    this.straightRunDistance = 0;
+    this.straightRunIdleSeconds = 0;
+    this.straightStormPending = false;
+    this.currentPlayerSurfaceSpeed = 0;
+    this.playerSpeedFactor = 0;
     for (const gorilla of this.gorillaPool) gorilla.active = false;
     for (const storm of this.stormPool || []) storm.deactivate();
     this.bananaField?.reset(this.playerNormal, this.playerFacing);
@@ -2165,6 +2240,7 @@ class GorillaRainGame {
       this.seed = (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0;
     }
     this.random = new SeededRandom(this.seed);
+    this.straightStormRandom = new SeededRandom(this.seed ^ 0x6a09e667);
     this.bananaField.random = this.random;
     this.resetGameState();
     this.showScreen("game");
@@ -2274,7 +2350,7 @@ class GorillaRainGame {
       }
 
       let step = 0;
-      if (this.accumulator >= FIXED_STEP) {
+      if (this.accumulator + epsilon >= FIXED_STEP) {
         step = Math.min(FIXED_STEP, remaining);
       } else if (this.accumulator + epsilon >= remaining) {
         step = remaining;
@@ -2295,22 +2371,9 @@ class GorillaRainGame {
       }
     }
 
-    if (
-      this.mode === "playing" &&
-      steps === MAX_FIXED_STEPS &&
-      this.accumulator > 0
-    ) {
-      const remaining = getRemainingSeconds(this.gameElapsed, this.bananaCount);
-      const skipped = Math.min(this.accumulator, remaining);
-      this.gameElapsed += skipped;
-      this.accumulator = 0;
-      this.currentStage = getStage(this.gameElapsed);
-      this.updateHUD(true);
-
-      if (skipped >= remaining - epsilon) {
-        this.finishGame(true);
-      }
-    }
+    // Every accepted frame (up to 0.5 seconds) fits within the 30-step
+    // budget. Keep any sub-step floating-point remainder in the accumulator;
+    // never advance only the clock while skipping collisions or storm logic.
   }
 
   updateGame(delta) {
@@ -2325,7 +2388,7 @@ class GorillaRainGame {
       this.cameraShake = this.motionEnabled ? 0.18 : 0;
     }
 
-    this.updatePlayer(delta);
+    const straightRunTriggered = this.updatePlayer(delta);
     this.bananaField.update(
       this.gameElapsed,
       this.currentStage.bananaTarget,
@@ -2353,20 +2416,29 @@ class GorillaRainGame {
 
     if (this.gameElapsed >= this.nextStormAt) {
       this.spawnStormWave(this.currentStage.stormLocations);
-      // Storm cadence tightens as the run goes on (see getStormInterval),
-      // restoring late-game pressure now that placement is fair and the
-      // warning is readable.
+      // Scheduled cadence is unchanged by the independent straight-run
+      // countermeasure and still tightens as the run goes on.
       const interval = getStormInterval(this.gameElapsed, this.profile.stormInterval);
       this.nextStormAt += interval;
       if (this.nextStormAt <= this.gameElapsed) {
         this.nextStormAt = this.gameElapsed + interval;
       }
     }
+    if (straightRunTriggered) {
+      this.straightStormPending = true;
+    }
+    if (this.straightStormPending && this.spawnStraightRunStorm()) {
+      this.straightStormPending = false;
+    }
 
     for (const storm of this.stormPool) {
       storm.update(this.gameElapsed, {
         onRainStart: () => this.onRainStart(),
-        onImpact: (cell) => this.spawnGorillaSwarm(cell.normal),
+        onImpact: (cell) =>
+          this.spawnGorillaSwarm(
+            cell.normal,
+            cell === this.straightRunStorm,
+          ),
       });
     }
 
@@ -2383,10 +2455,76 @@ class GorillaRainGame {
     this.updateHUD();
   }
 
+  setSurfaceCandidate(target, startNormal, direction, angle) {
+    return target
+      .copy(startNormal)
+      .multiplyScalar(Math.cos(angle))
+      .addScaledVector(direction, Math.sin(angle))
+      .normalize();
+  }
+
+  isTreeContact(normal) {
+    return this.treeObstacles.some(
+      (tree) => normal.dot(tree.normal) >= tree.contactDot,
+    );
+  }
+
+  findBlockingTree(candidateNormal, currentNormal) {
+    for (const tree of this.treeObstacles) {
+      const candidateDot = candidateNormal.dot(tree.normal);
+      if (candidateDot < tree.contactDot) continue;
+      const currentDot = currentNormal.dot(tree.normal);
+      if (
+        shouldBlockSurfaceObstacle(
+          currentDot,
+          candidateDot,
+          tree.contactDot,
+        )
+      ) {
+        return tree;
+      }
+    }
+    return null;
+  }
+
+  isRockContact(normal) {
+    return this.rockSlowZones.some(
+      (rock) => normal.dot(rock.normal) >= rock.contactDot,
+    );
+  }
+
+  resetStraightRunProgress() {
+    this.straightRunDistance = 0;
+    this.straightRunIdleSeconds = 0;
+    this.straightRunHeading
+      .copy(this.playerFacing)
+      .addScaledVector(
+        this.playerNormal,
+        -this.playerFacing.dot(this.playerNormal),
+      );
+    if (this.straightRunHeading.lengthSq() < 0.0001) {
+      this.straightRunHeading.copy(this.viewForward);
+    }
+    this.straightRunHeading.normalize();
+  }
+
   updatePlayer(delta) {
     this.controls.getVector(this.inputVector);
     const inputStrength = clamp(this.inputVector.length(), 0, 1);
-    if (inputStrength < 0.01) return;
+    this.playerSpeedFactor = 0;
+    this.currentPlayerSurfaceSpeed = 0;
+    if (inputStrength < 0.01) {
+      const idleState = advanceStraightRunIdle(
+        this.straightRunDistance,
+        this.straightRunIdleSeconds,
+        delta,
+      );
+      this.straightRunIdleSeconds = idleState.idleSeconds;
+      if (idleState.reset) {
+        this.resetStraightRunProgress();
+      }
+      return false;
+    }
 
     this.viewRight.crossVectors(this.viewForward, this.playerNormal).normalize();
     this.desiredMove
@@ -2397,32 +2535,177 @@ class GorillaRainGame {
       this.playerNormal,
       -this.desiredMove.dot(this.playerNormal),
     );
-    if (this.desiredMove.lengthSq() < 0.0001) return;
+    if (this.desiredMove.lengthSq() < 0.0001) return false;
     this.desiredMove.normalize();
 
     const boosted = this.gameElapsed < this.boostUntil;
-    const speed = PLAYER_SPEED * (boosted ? BOOST_MULTIPLIER : 1) * inputStrength;
-    const angle = (speed * delta) / PLANET_RADIUS;
+    const baseSpeed =
+      PLAYER_SPEED * (boosted ? BOOST_MULTIPLIER : 1) * inputStrength;
+    let slowMultiplier = getRockSpeedMultiplier(
+      this.isRockContact(this.playerNormal),
+    );
+    let movementScale = 1;
+    this.slideDirection.copy(this.desiredMove);
     this.previousNormal.copy(this.playerNormal);
-    this.playerNormal
-      .multiplyScalar(Math.cos(angle))
-      .addScaledVector(this.desiredMove, Math.sin(angle))
+
+    let angle =
+      (baseSpeed * slowMultiplier * movementScale * delta) / PLANET_RADIUS;
+    this.setSurfaceCandidate(
+      this.moveCandidate,
+      this.playerNormal,
+      this.slideDirection,
+      angle,
+    );
+    if (
+      slowMultiplier === 1 &&
+      this.isRockContact(this.moveCandidate)
+    ) {
+      slowMultiplier = ROCK_SLOW_MULTIPLIER;
+      angle =
+        (baseSpeed * slowMultiplier * movementScale * delta) / PLANET_RADIUS;
+      this.setSurfaceCandidate(
+        this.moveCandidate,
+        this.playerNormal,
+        this.slideDirection,
+        angle,
+      );
+    }
+
+    const blockingTree = this.findBlockingTree(
+      this.moveCandidate,
+      this.playerNormal,
+    );
+    if (blockingTree) {
+      this.obstacleAway
+        .copy(this.playerNormal)
+        .addScaledVector(
+          blockingTree.normal,
+          -this.playerNormal.dot(blockingTree.normal),
+        );
+      if (this.obstacleAway.lengthSq() > 0.000001) {
+        this.obstacleAway.normalize();
+        const inward = this.desiredMove.dot(this.obstacleAway);
+        this.slideDirection.copy(this.desiredMove);
+        if (inward < 0) {
+          this.slideDirection.addScaledVector(this.obstacleAway, -inward);
+        }
+        movementScale = getObstacleSlideScale(inward);
+      } else {
+        movementScale = 0;
+      }
+
+      if (movementScale > 0.01) {
+        this.slideDirection.normalize();
+        angle =
+          (baseSpeed * slowMultiplier * movementScale * delta) /
+          PLANET_RADIUS;
+        this.setSurfaceCandidate(
+          this.moveCandidate,
+          this.playerNormal,
+          this.slideDirection,
+          angle,
+        );
+        if (
+          slowMultiplier === 1 &&
+          this.isRockContact(this.moveCandidate)
+        ) {
+          slowMultiplier = ROCK_SLOW_MULTIPLIER;
+          angle =
+            (baseSpeed * slowMultiplier * movementScale * delta) /
+            PLANET_RADIUS;
+          this.setSurfaceCandidate(
+            this.moveCandidate,
+            this.playerNormal,
+            this.slideDirection,
+            angle,
+          );
+        }
+        if (
+          this.findBlockingTree(this.moveCandidate, this.playerNormal)
+        ) {
+          this.moveCandidate.copy(this.playerNormal);
+        }
+      } else {
+        this.moveCandidate.copy(this.playerNormal);
+      }
+    }
+
+    this.playerNormal.copy(this.moveCandidate);
+    const normalDot = clamp(
+      this.previousNormal.dot(this.playerNormal),
+      -1,
+      1,
+    );
+    const stepAngle = Math.acos(normalDot);
+    const stepDistance = stepAngle * PLANET_RADIUS;
+    if (stepDistance <= 0.000001) {
+      const idleState = advanceStraightRunIdle(
+        this.straightRunDistance,
+        this.straightRunIdleSeconds,
+        delta,
+      );
+      this.straightRunIdleSeconds = idleState.idleSeconds;
+      if (idleState.reset) {
+        this.resetStraightRunProgress();
+      }
+      return false;
+    }
+
+    this.straightRunIdleSeconds = 0;
+    this.currentPlayerSurfaceSpeed = stepDistance / Math.max(delta, 0.000001);
+    this.playerSpeedFactor = this.currentPlayerSurfaceSpeed / PLAYER_SPEED;
+
+    this.travelHeading
+      .copy(this.playerNormal)
+      .multiplyScalar(normalDot)
+      .sub(this.previousNormal)
       .normalize();
+    this.straightTransportQuaternion.setFromUnitVectors(
+      this.previousNormal,
+      this.playerNormal,
+    );
+    this.straightRunHeading.applyQuaternion(
+      this.straightTransportQuaternion,
+    );
+    this.straightRunHeading.addScaledVector(
+      this.playerNormal,
+      -this.straightRunHeading.dot(this.playerNormal),
+    );
+    if (this.straightRunHeading.lengthSq() < 0.0001) {
+      this.straightRunHeading.copy(this.travelHeading);
+    } else {
+      this.straightRunHeading.normalize();
+    }
+
+    const straightState = advanceStraightRun(
+      this.straightRunDistance,
+      stepDistance,
+      this.straightRunHeading.dot(this.travelHeading),
+    );
+    this.straightRunDistance = straightState.distance;
+    if (!straightState.aligned) {
+      this.straightRunHeading.copy(this.travelHeading);
+    }
 
     this.tempA
       .copy(this.viewForward)
-      .addScaledVector(this.playerNormal, -this.viewForward.dot(this.playerNormal));
-    if (this.tempA.lengthSq() > 0.0001) this.viewForward.copy(this.tempA.normalize());
+      .addScaledVector(
+        this.playerNormal,
+        -this.viewForward.dot(this.playerNormal),
+      );
+    if (this.tempA.lengthSq() > 0.0001) {
+      this.viewForward.copy(this.tempA.normalize());
+    }
 
-    this.tempB
-      .copy(this.desiredMove)
-      .addScaledVector(this.playerNormal, -this.desiredMove.dot(this.playerNormal))
-      .normalize();
     const turn = 1 - Math.exp(-delta * 12);
-    this.playerFacing.lerp(this.tempB, turn);
+    this.playerFacing.lerp(this.travelHeading, turn);
     this.playerFacing
-      .addScaledVector(this.playerNormal, -this.playerFacing.dot(this.playerNormal))
+      .addScaledVector(
+        this.playerNormal,
+        -this.playerFacing.dot(this.playerNormal),
+      )
       .normalize();
+    return straightState.triggered;
   }
 
   updateGorillas(delta) {
@@ -2446,14 +2729,61 @@ class GorillaRainGame {
         this.tempA.copy(gorilla.forward);
       }
       const angle = (gorilla.speed * delta) / PLANET_RADIUS;
-      gorilla.normal
-        .multiplyScalar(Math.cos(angle))
-        .addScaledVector(this.tempA, Math.sin(angle))
-        .normalize();
-      gorilla.forward
-        .copy(this.tempA)
-        .addScaledVector(gorilla.normal, -this.tempA.dot(gorilla.normal))
-        .normalize();
+      this.tempC.copy(gorilla.normal);
+      this.slideDirection.copy(this.tempA);
+      this.setSurfaceCandidate(
+        this.moveCandidate,
+        this.tempC,
+        this.slideDirection,
+        angle,
+      );
+      const blockingTree = this.findBlockingTree(
+        this.moveCandidate,
+        this.tempC,
+      );
+      if (blockingTree) {
+        this.obstacleAway
+          .copy(this.tempC)
+          .addScaledVector(
+            blockingTree.normal,
+            -this.tempC.dot(blockingTree.normal),
+          );
+        if (this.obstacleAway.lengthSq() > 0.000001) {
+          this.obstacleAway.normalize();
+          const inward = this.slideDirection.dot(this.obstacleAway);
+          if (inward < 0) {
+            this.slideDirection.addScaledVector(
+              this.obstacleAway,
+              -inward,
+            );
+          }
+        }
+        const slideScale = clamp(this.slideDirection.length(), 0, 1);
+        if (slideScale > 0.01) {
+          this.slideDirection.normalize();
+          this.setSurfaceCandidate(
+            this.moveCandidate,
+            this.tempC,
+            this.slideDirection,
+            angle * slideScale,
+          );
+          if (this.findBlockingTree(this.moveCandidate, this.tempC)) {
+            this.moveCandidate.copy(this.tempC);
+          }
+        } else {
+          this.moveCandidate.copy(this.tempC);
+        }
+      }
+      gorilla.normal.copy(this.moveCandidate);
+      if (gorilla.normal.dot(this.tempC) < 0.999999999) {
+        gorilla.forward
+          .copy(this.slideDirection)
+          .addScaledVector(
+            gorilla.normal,
+            -this.slideDirection.dot(gorilla.normal),
+          )
+          .normalize();
+      }
 
       if (
         this.gameElapsed >= gorilla.dangerAt &&
@@ -2466,12 +2796,12 @@ class GorillaRainGame {
   }
 
   spawnStormWave(count) {
-    const available = this.stormPool.filter((storm) => !storm.active);
+    const available = this.regularStormPool.filter((storm) => !storm.active);
     const actualCount = Math.min(count, available.length);
     // Angles are measured from the player's actual movement direction
-    // (playerFacing), not the camera's view forward, and pickStormAngles
-    // guarantees every one of them keeps clear of that heading -- so
-    // fleeing forward can never spawn a storm directly in the escape path.
+    // (playerFacing), not the camera's view forward. These scheduled storms
+    // retain a small forward clearance; the route-pressure storm below is the
+    // only one deliberately placed in front.
     const angles = pickStormAngles(actualCount, this.random);
     this.viewRight.crossVectors(this.playerFacing, this.playerNormal).normalize();
 
@@ -2482,15 +2812,148 @@ class GorillaRainGame {
         .multiplyScalar(Math.cos(angle))
         .addScaledVector(this.viewRight, Math.sin(angle))
         .normalize();
-      const distance = this.random.range(7.2, 12.5);
-      const surfaceAngle = distance / PLANET_RADIUS;
-      this.tempB
-        .copy(this.playerNormal)
-        .multiplyScalar(Math.cos(surfaceAngle))
-        .addScaledVector(this.tempA, Math.sin(surfaceAngle))
-        .normalize();
-      available[index].activate(this.tempB, this.gameElapsed, this.random);
+      const distance = this.random.range(
+        STORM_SPAWN_DISTANCE_MIN,
+        STORM_SPAWN_DISTANCE_MAX,
+      );
+      this.setSurfaceCandidate(
+        this.tempB,
+        this.playerNormal,
+        this.tempA,
+        distance / PLANET_RADIUS,
+      );
+      let bestClearance = this.straightRunStorm.active
+        ? this.getStormClearance(this.tempB, [this.straightRunStorm])
+        : Infinity;
+      this.regularStormBestCandidate.copy(this.tempB);
+      if (bestClearance >= STRAIGHT_STORM_MIN_REGULAR_CLEARANCE) {
+        available[index].activate(this.tempB, this.gameElapsed, this.random);
+        continue;
+      }
+
+      // Deterministic fallback directions cover the rear and both edges of
+      // the scheduled forward-clearance cone. They consume no extra normal
+      // random values, so the route-pressure event cannot shift later normal
+      // storms, gorilla speeds, or banana placements.
+      for (const angle of [
+        Math.PI,
+        STORM_MIN_CLEARANCE,
+        Math.PI * 2 - STORM_MIN_CLEARANCE,
+      ]) {
+        for (const distance of [
+          STORM_SPAWN_DISTANCE_MIN,
+          STORM_SPAWN_DISTANCE_MAX,
+        ]) {
+          this.tempA
+            .copy(this.playerFacing)
+            .multiplyScalar(Math.cos(angle))
+            .addScaledVector(this.viewRight, Math.sin(angle))
+            .normalize();
+          this.setSurfaceCandidate(
+            this.tempB,
+            this.playerNormal,
+            this.tempA,
+            distance / PLANET_RADIUS,
+          );
+          const clearance = this.getStormClearance(
+            this.tempB,
+            [this.straightRunStorm],
+          );
+          if (clearance > bestClearance) {
+            bestClearance = clearance;
+            this.regularStormBestCandidate.copy(this.tempB);
+          }
+        }
+      }
+      if (bestClearance >= STRAIGHT_STORM_MIN_REGULAR_CLEARANCE) {
+        available[index].activate(
+          this.regularStormBestCandidate,
+          this.gameElapsed,
+          this.random,
+        );
+      }
     }
+  }
+
+  getStormClearance(candidate, storms) {
+    let clearance = Infinity;
+    for (const storm of storms) {
+      if (!storm.active) continue;
+      const distance =
+        Math.acos(clamp(candidate.dot(storm.normal), -1, 1)) * PLANET_RADIUS;
+      clearance = Math.min(clearance, distance);
+    }
+    return clearance;
+  }
+
+  spawnStraightRunStorm() {
+    if (this.straightRunStorm.active) return false;
+
+    this.viewRight
+      .crossVectors(this.travelHeading, this.playerNormal)
+      .normalize();
+    const baseBearing = this.straightStormRandom.range(
+      -STRAIGHT_STORM_BEARING_JITTER,
+      STRAIGHT_STORM_BEARING_JITTER,
+    );
+    const preferredDistance = getStraightStormDistance(
+      this.currentPlayerSurfaceSpeed,
+      STORM_FALL_SECONDS,
+    );
+    let bestClearance = -Infinity;
+    let foundClearCandidate = false;
+
+    // Normally the first candidate is used. The wider deterministic search is
+    // only needed when up to three scheduled storms already occupy the front:
+    // it preserves the required extra spawn while preventing a doubled swarm.
+    for (
+      let distance = preferredDistance;
+      distance <= STRAIGHT_STORM_AVOIDANCE_DISTANCE_MAX;
+      distance += 1
+    ) {
+      const surfaceAngle = distance / PLANET_RADIUS;
+      for (let offsetStep = 0; offsetStep <= 29; offsetStep += 1) {
+        const signedStep =
+          offsetStep === 0
+            ? 0
+            : Math.ceil(offsetStep / 2) * (offsetStep % 2 ? 1 : -1);
+        const bearing = baseBearing + signedStep * 0.1;
+        if (Math.abs(bearing) >= Math.PI / 2) continue;
+        this.tempA
+          .copy(this.travelHeading)
+          .multiplyScalar(Math.cos(bearing))
+          .addScaledVector(this.viewRight, Math.sin(bearing))
+          .normalize();
+        this.setSurfaceCandidate(
+          this.straightStormCandidate,
+          this.playerNormal,
+          this.tempA,
+          surfaceAngle,
+        );
+        const clearance = this.getStormClearance(
+          this.straightStormCandidate,
+          this.regularStormPool,
+        );
+        if (clearance > bestClearance) {
+          bestClearance = clearance;
+          this.straightStormBestCandidate.copy(this.straightStormCandidate);
+        }
+        if (clearance < STRAIGHT_STORM_MIN_REGULAR_CLEARANCE) continue;
+        foundClearCandidate = true;
+        break;
+      }
+      if (foundClearCandidate) break;
+    }
+
+    // Three six-unit exclusion discs cannot cover this broad forward search
+    // band; the guard keeps that invariant explicit if future constants move.
+    if (!foundClearCandidate) return false;
+    this.straightRunStorm.activate(
+      this.straightStormBestCandidate,
+      this.gameElapsed,
+      this.straightStormRandom,
+    );
+    return true;
   }
 
   onRainStart() {
@@ -2501,8 +2964,11 @@ class GorillaRainGame {
     ui.stormFlash.classList.add("flash");
   }
 
-  spawnGorillaSwarm(targetNormal) {
+  spawnGorillaSwarm(targetNormal, reservedForStraight = false) {
     this.sound.gorilla();
+    const spawnRandom = reservedForStraight
+      ? this.straightStormRandom
+      : this.random;
     const right = this.tempA
       .crossVectors(
         Math.abs(targetNormal.y) > 0.82 ? new THREE.Vector3(1, 0, 0) : Y_AXIS,
@@ -2514,19 +2980,31 @@ class GorillaRainGame {
 
     for (const gorilla of this.gorillaPool) {
       if (gorilla.active) continue;
-      const angle = (spawned / this.profile.gorillasPerStorm) * Math.PI * 2;
-      const radius = this.random.range(1.45, 2.45);
-      this.tempC
-        .copy(right)
-        .multiplyScalar(Math.cos(angle))
-        .addScaledVector(forward, Math.sin(angle))
-        .normalize();
-      const surfaceAngle = radius / PLANET_RADIUS;
-      gorilla.normal
-        .copy(targetNormal)
-        .multiplyScalar(Math.cos(surfaceAngle))
-        .addScaledVector(this.tempC, Math.sin(surfaceAngle))
-        .normalize();
+      if (gorilla.reservedForStraight !== reservedForStraight) continue;
+      const baseAngle =
+        (spawned / this.profile.gorillasPerStorm) * Math.PI * 2;
+      const placed = trySurfacePlacement(
+        24,
+        (attempt) => {
+          const angle =
+            baseAngle +
+            (attempt === 0 ? 0 : spawnRandom.range(-0.45, 0.45));
+          const radius = spawnRandom.range(1.45, 2.45);
+          this.tempC
+            .copy(right)
+            .multiplyScalar(Math.cos(angle))
+            .addScaledVector(forward, Math.sin(angle))
+            .normalize();
+          const surfaceAngle = radius / PLANET_RADIUS;
+          gorilla.normal
+            .copy(targetNormal)
+            .multiplyScalar(Math.cos(surfaceAngle))
+            .addScaledVector(this.tempC, Math.sin(surfaceAngle))
+            .normalize();
+        },
+        () => this.isTreeContact(gorilla.normal),
+      );
+      if (!placed) continue;
       gorilla.forward
         .copy(this.playerNormal)
         .addScaledVector(
@@ -2535,10 +3013,11 @@ class GorillaRainGame {
         )
         .normalize();
       gorilla.bornAt = this.gameElapsed;
-      gorilla.dangerAt = this.gameElapsed + 0.38;
+      gorilla.dangerAt =
+        this.gameElapsed + STRAIGHT_STORM_DANGER_DELAY_SECONDS;
       gorilla.expiresAt = this.gameElapsed + GORILLA_CHASE_SECONDS;
       const speedRange = getGorillaSpeedRange(this.gameElapsed);
-      gorilla.speed = this.random.range(speedRange.min, speedRange.max);
+      gorilla.speed = spawnRandom.range(speedRange.min, speedRange.max);
       gorilla.active = true;
       spawned += 1;
       if (spawned >= this.profile.gorillasPerStorm) break;
@@ -2556,17 +3035,24 @@ class GorillaRainGame {
   }
 
   updatePlayerAnimation() {
-    const inputStrength = this.mode === "playing" ? this.inputVector.length() : 0;
-    const boosted = this.gameElapsed < this.boostUntil;
-    const cadence = boosted ? 14 : 10;
-    const swing = Math.sin(this.gameElapsed * cadence) * 0.6 * inputStrength;
+    const movement =
+      this.mode === "playing"
+        ? clamp(this.playerSpeedFactor, 0, BOOST_MULTIPLIER)
+        : 0;
+    const cadence = 10 * Math.max(0.65, movement);
+    const swing =
+      Math.sin(this.gameElapsed * cadence) *
+      0.6 *
+      clamp(movement, 0, 1);
     this.playerLeftArm.rotation.x = swing;
     this.playerRightArm.rotation.x = -swing;
     this.playerLeftLeg.rotation.x = -swing * 0.72;
     this.playerRightLeg.rotation.x = swing * 0.72;
     this.player.position.addScaledVector(
       this.playerNormal,
-      Math.abs(Math.sin(this.gameElapsed * cadence)) * 0.045 * inputStrength,
+      Math.abs(Math.sin(this.gameElapsed * cadence)) *
+        0.045 *
+        clamp(movement, 0, 1),
     );
   }
 
