@@ -63,6 +63,7 @@ import {
   getSurfaceContactDot,
   getTreeCollisionDistance,
   isRockTopReachable,
+  normalizeBestRankingRows,
   pickBananaBearing,
   pickStormAngles,
   shouldBlockSurfaceObstacle,
@@ -128,6 +129,32 @@ test("スコアは生存時間とバナナの両方を加点する", () => {
   assert.equal(calculateScore(12.345, 3), 1534);
   assert.equal(formatScore(1534), "001534");
   assert.equal(formatScore(-10), "000000");
+});
+
+test("結果ランキングはSupabaseの値を検査し、上位5件だけに整える", () => {
+  const rows = normalizeBestRankingRows(
+    [
+      { rank_no: "1", display_name: " べ ", best_score: "9599" },
+      { rank_no: 2, display_name: "ゴリそば", best_score: 5584.9 },
+      { rank_no: 0, display_name: "順位不正", best_score: 9000 },
+      { rank_no: 3, display_name: "", best_score: 5091 },
+      { rank_no: 3, display_name: "カメレオンJP", best_score: 5091 },
+      { rank_no: 4, display_name: "アキレア", best_score: 4549 },
+      { rank_no: 5, display_name: "ランランルー", best_score: 3836 },
+      { rank_no: 6, display_name: "6位", best_score: 3000 },
+    ],
+    5,
+  );
+
+  assert.deepEqual(rows, [
+    { rank: 1, displayName: "べ", bestScore: 9599 },
+    { rank: 2, displayName: "ゴリそば", bestScore: 5584 },
+    { rank: 3, displayName: "カメレオンJP", bestScore: 5091 },
+    { rank: 4, displayName: "アキレア", bestScore: 4549 },
+    { rank: 5, displayName: "ランランルー", bestScore: 3836 },
+  ]);
+  assert.deepEqual(normalizeBestRankingRows(null), []);
+  assert.deepEqual(normalizeBestRankingRows(rows, 0), []);
 });
 
 test("PCとSPはランキング条件を共有し、PCは描画だけを増やす", () => {
@@ -688,6 +715,11 @@ test("プレイヤーは紫系の服を着て、実験場ランキングへ1回�
     "player-name-input",
     "player-name-message",
     "ranking-status",
+    "result-ranking",
+    "result-ranking-title",
+    "result-ranking-message",
+    "result-ranking-list",
+    "result-ranking-detail-link",
     "home-share-button",
     "home-lab-link",
     "result-home-button",
@@ -705,19 +737,37 @@ test("プレイヤーは紫系の服を着て、実験場ランキングへ1回�
   );
 
   assert.match(game, /const GAME_SLUG = "goriragouu"/);
-  assert.match(game, /const CLIENT_VERSION = "goriragouu_v20260728_01"/);
+  assert.match(game, /const CLIENT_VERSION = "goriragouu_v20260729_01"/);
   assert.match(
     game,
     /const GAME_URL = "https:\/\/chameleonjp-lab\.github\.io\/goriragouu\/"/,
   );
   assert.match(game, /supabase-js@2\.110\.9\/\+esm/);
   assert.match(game, /\.rpc\("submit_score"/);
+  assert.match(game, /\.rpc\("get_best_score_ranking"/);
+  assert.match(game, /p_game_slug:\s*GAME_SLUG/);
+  assert.match(game, /p_limit:\s*limit/);
+  assert.match(game, /const RESULT_RANKING_LIMIT = 5/);
   assert.match(game, /result\.accepted !== true/);
   assert.match(game, /this\.scoreSubmitAttempted = true/);
   assert.match(game, /this\.setLabNavigationLocked\(true\)/);
   assert.match(game, /this\.setLabNavigationLocked\(false\)/);
   assert.doesNotMatch(game, /service_role|sb_secret_/i);
   assert.doesNotMatch(game, /window\.location\.href/);
+  assert.doesNotMatch(game, /resultRankingList\.innerHTML/);
+  assert.match(game, /resultRankingList\.replaceChildren/);
+  assert.match(game, /nameText\.textContent = displayName/);
+  assert.match(game, /item\.setAttribute\("aria-current", "true"\)/);
+  assert.match(game, /void this\.loadResultRanking\(runId\)/);
+  assert.match(game, /normalizeBestRankingRows\(rows, RESULT_RANKING_LIMIT\)/);
+  assert.ok(
+    (game.match(/ui\.resultRankingDetailLink/g) || []).length >= 2,
+    "詳細ランキングは押下防止・送信中ロックの対象にします",
+  );
+  assert.match(
+    html,
+    /ranking\.html\?game=goriragouu/,
+  );
 
   const finishMethod = game.slice(
     game.indexOf("  finishGame(cleared) {"),
@@ -731,6 +781,7 @@ test("プレイヤーは紫系の服を着て、実験場ランキングへ1回�
     (finishMethod.match(/submitGameScore\(/g) || []).length,
     1,
   );
+  assert.match(finishMethod, /ui\.result\.scrollTop = 0/);
 
   assert.match(game, /color: 0x8b5cf6/);
   assert.match(game, /color: 0x4c1d95/);

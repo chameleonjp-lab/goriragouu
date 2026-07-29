@@ -428,6 +428,40 @@ export function formatScore(score) {
   return String(safeScore).padStart(6, "0");
 }
 
+export function normalizeBestRankingRows(rows, limit = 5) {
+  if (!Array.isArray(rows)) return [];
+
+  const safeLimit = Number.isFinite(limit)
+    ? Math.min(100, Math.max(0, Math.floor(limit)))
+    : 5;
+  if (safeLimit === 0) return [];
+  const normalized = [];
+
+  for (const row of rows) {
+    const rank = Number(row?.rank_no);
+    const bestScore = Number(row?.best_score);
+    const displayName = String(row?.display_name || "").trim().slice(0, 10);
+    if (
+      !Number.isInteger(rank) ||
+      rank < 1 ||
+      !Number.isFinite(bestScore) ||
+      bestScore < 0 ||
+      !displayName
+    ) {
+      continue;
+    }
+
+    normalized.push({
+      rank,
+      displayName,
+      bestScore: Math.floor(bestScore),
+    });
+    if (normalized.length >= safeLimit) break;
+  }
+
+  return normalized;
+}
+
 export function bananasUntilBonus(bananaCount) {
   const safeCount = Number.isFinite(bananaCount) ? Math.max(0, Math.floor(bananaCount)) : 0;
   const remainder = safeCount % 10;
