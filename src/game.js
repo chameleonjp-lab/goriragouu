@@ -50,6 +50,7 @@ import {
   getSurfaceContactDot,
   getTreeCollisionDistance,
   isRockTopReachable,
+  normalizeBestRankingRows,
   pickBananaBearing,
   pickStormAngles,
   shouldBlockSurfaceObstacle,
@@ -88,8 +89,9 @@ const IS_MOBILE =
   (FORCED_DEVICE !== "pc" && IS_COARSE_POINTER && !HAS_FINE_POINTER);
 const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
 const GAME_SLUG = "goriragouu";
-const CLIENT_VERSION = "goriragouu_v20260728_01";
+const CLIENT_VERSION = "goriragouu_v20260729_01";
 const GAME_URL = "https://chameleonjp-lab.github.io/goriragouu/";
+const RESULT_RANKING_LIMIT = 5;
 const SUPABASE_URL = "https://mlpnjgezrnhdxsxolyzj.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY =
   "sb_publishable_drzcy0v97knU6FgjqSgBHw_0A9XPdFM";
@@ -245,6 +247,12 @@ const ui = {
   resultBonus: document.querySelector("#result-bonus"),
   resultMode: document.querySelector("#result-mode"),
   rankingStatus: document.querySelector("#ranking-status"),
+  resultRanking: document.querySelector("#result-ranking"),
+  resultRankingMessage: document.querySelector("#result-ranking-message"),
+  resultRankingList: document.querySelector("#result-ranking-list"),
+  resultRankingDetailLink: document.querySelector(
+    "#result-ranking-detail-link",
+  ),
 };
 
 function clamp(value, min, max) {
@@ -479,6 +487,18 @@ class RankingClient {
       throw new Error("score was not accepted");
     }
     return result;
+  }
+
+  async getBestScores(limit = RESULT_RANKING_LIMIT) {
+    const client = await this.connect();
+    if (!client) throw new Error("ranking client unavailable");
+
+    const { data, error } = await client.rpc("get_best_score_ranking", {
+      p_game_slug: GAME_SLUG,
+      p_limit: limit,
+    });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
   }
 }
 
@@ -2198,7 +2218,11 @@ class GorillaRainGame {
     ui.shareButton.addEventListener("click", () => this.shareResult());
     ui.homeShareButton.addEventListener("click", () => this.shareGame());
     ui.resultHomeButton.addEventListener("click", () => this.returnHome());
-    for (const labLink of [ui.homeLabLink, ui.resultLabLink]) {
+    for (const labLink of [
+      ui.homeLabLink,
+      ui.resultLabLink,
+      ui.resultRankingDetailLink,
+    ]) {
       labLink.addEventListener("click", (event) => {
         if (labLink.getAttribute("aria-disabled") === "true") {
           event.preventDefault();
@@ -2318,9 +2342,103 @@ class GorillaRainGame {
   }
 
   setLabNavigationLocked(locked) {
-    for (const labLink of [ui.homeLabLink, ui.resultLabLink]) {
+    for (const labLink of [
+      ui.homeLabLink,
+      ui.resultLabLink,
+      ui.resultRankingDetailLink,
+    ]) {
       labLink.setAttribute("aria-disabled", String(locked));
       labLink.tabIndex = locked ? -1 : 0;
+    }
+  }
+
+  prepareResultRanking() {
+    ui.resultRanking.setAttribute("aria-busy", "true");
+    ui.resultRankingMessage.hidden = false;
+    ui.resultRankingMessage.dataset.state = "loading";
+    ui.resultRankingMessage.textContent = "ランキングを読み込み中…";
+    ui.resultRankingList.hidden = true;
+    ui.resultRankingList.replaceChildren();
+  }
+
+  renderResultRanking(rows) {
+    const currentName = normalizeDisplayName(this.displayName);
+    const fragment = document.createDocumentFragment();
+    let validCount = 0;
+
+    for (const {
+      rank,
+      displayName,
+      bestScore,
+    } of normalizeBestRankingRows(rows, RESULT_RANKING_LIMIT)) {
+      validCount += 1;
+      const isCurrentPlayer = displayName === currentName;
+      const item = document.createElement("li");
+      item.classList.toggle("is-current-player", isCurrentPlayer);
+      if (isCurrentPlayer) item.setAttribute("aria-current", "true");
+      item.setAttribute(
+        "aria-label",
+        `${rank}位、${displayName}、${bestScore.toLocaleString("ja-JP")}点${
+          isCurrentPlayer ? "、あなた" : ""
+        }`,
+      );
+
+      const position = document.createElement("span");
+      position.className = "result-ranking-position";
+      position.textContent = `${rank}位`;
+
+      const name = document.createElement("span");
+      name.className = "result-ranking-name";
+      const nameText = document.createElement("span");
+      nameText.className = "result-ranking-name-text";
+      nameText.textContent = displayName;
+      name.appendChild(nameText);
+      if (isCurrentPlayer) {
+        const you = document.createElement("span");
+        you.className = "result-ranking-you";
+        you.textContent = "あなた";
+        name.appendChild(you);
+      }
+
+      const scoreText = document.createElement("span");
+      scoreText.className = "result-ranking-score";
+      scoreText.textContent = `${bestScore.toLocaleString("ja-JP")}点`;
+
+      item.append(position, name, scoreText);
+      fragment.appendChild(item);
+    }
+
+    ui.resultRanking.setAttribute("aria-busy", "false");
+    if (validCount === 0) {
+      ui.resultRankingMessage.hidden = false;
+      ui.resultRankingMessage.dataset.state = "empty";
+      ui.resultRankingMessage.textContent =
+        "まだランキング記録がありません。最初の記録を目指してください。";
+      ui.resultRankingList.hidden = true;
+      return;
+    }
+
+    ui.resultRankingList.replaceChildren(fragment);
+    ui.resultRankingList.hidden = false;
+    ui.resultRankingMessage.hidden = true;
+  }
+
+  async loadResultRanking(runId) {
+    if (runId !== this.scoreSubmissionRunId) return;
+
+    try {
+      const rows = await this.ranking.getBestScores(RESULT_RANKING_LIMIT);
+      if (runId !== this.scoreSubmissionRunId) return;
+      this.renderResultRanking(rows);
+    } catch (error) {
+      if (runId !== this.scoreSubmissionRunId) return;
+      console.warn("ランキング取得に失敗しました。", error);
+      ui.resultRanking.setAttribute("aria-busy", "false");
+      ui.resultRankingList.hidden = true;
+      ui.resultRankingMessage.hidden = false;
+      ui.resultRankingMessage.dataset.state = "error";
+      ui.resultRankingMessage.textContent =
+        "ランキングを読み込めませんでした。詳細ランキングから再確認できます。";
     }
   }
 
@@ -2341,6 +2459,7 @@ class GorillaRainGame {
         "error",
       );
       this.setLabNavigationLocked(false);
+      void this.loadResultRanking(runId);
       return;
     }
 
@@ -2371,6 +2490,7 @@ class GorillaRainGame {
     } finally {
       if (runId === this.scoreSubmissionRunId) {
         this.setLabNavigationLocked(false);
+        void this.loadResultRanking(runId);
       }
     }
   }
@@ -2494,6 +2614,7 @@ class GorillaRainGame {
     this.setRankingStatus(
       "結果はゲーム終了時にランキングへ自動送信します。",
     );
+    this.prepareResultRanking();
     ui.resultBestScoreLabel.textContent = "端末の自己ベスト";
     ui.bananaScoreFx.classList.remove("active");
     window.clearTimeout(this.scoreFxTimer);
@@ -3575,6 +3696,7 @@ class GorillaRainGame {
       this.sound.gameOver();
     }
     this.showScreen("result");
+    ui.result.scrollTop = 0;
     this.setLabNavigationLocked(true);
     void this.submitGameScore(score, this.scoreSubmissionRunId);
     window.requestAnimationFrame(() => {

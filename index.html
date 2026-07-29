@@ -298,6 +298,43 @@
               他のゲームで遊ぶ
             </a>
           </div>
+
+          <section
+            id="result-ranking"
+            class="result-ranking"
+            aria-labelledby="result-ranking-title"
+            aria-busy="true"
+          >
+            <div class="result-ranking-heading">
+              <div>
+                <p class="eyebrow">BEST SCORE</p>
+                <h3 id="result-ranking-title">最高スコアランキング</h3>
+              </div>
+              <span>TOP 5</span>
+            </div>
+            <p
+              id="result-ranking-message"
+              class="result-ranking-message"
+              role="status"
+              aria-live="polite"
+            >
+              ランキングを読み込みます…
+            </p>
+            <ol
+              id="result-ranking-list"
+              class="result-ranking-list"
+              aria-label="最高スコア上位5件"
+              hidden
+            ></ol>
+            <a
+              id="result-ranking-detail-link"
+              class="result-ranking-link"
+              href="https://chameleonjp.codeberg.page/chameleonjp_lab/ranking.html?game=goriragouu"
+              aria-disabled="true"
+            >
+              100位までの詳細ランキングを見る
+            </a>
+          </section>
         </section>
       </main>
 
