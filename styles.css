@@ -1268,6 +1268,12 @@ h1 .rain-title {
   }
 }
 
+@media (min-width: 1000px) and (hover: none) and (pointer: coarse) {
+  .hero-card {
+    transform: none;
+  }
+}
+
 @media (max-height: 720px) and (orientation: landscape) {
   .home-screen,
   .result-screen {
