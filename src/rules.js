@@ -604,7 +604,6 @@ export function getDeviceProfile(isMobile) {
   if (isMobile) {
     return Object.freeze({
       id: "shared-rules-sp-render",
-      label: "共通ルール・SP描画",
       gorillasPerStorm: 5,
       // At the shortest interval, three final-stage waves can still be inside
       // their five-second chase window: 3 waves * 3 locations * 5 gorillas.
@@ -631,7 +630,6 @@ export function getDeviceProfile(isMobile) {
 
   return Object.freeze({
     id: "shared-rules-pc-render",
-    label: "共通ルール・PC描画",
     // Rankings use one slug, so gameplay-affecting values must match the
     // smartphone profile. PC can spend its extra budget on rendering only.
     gorillasPerStorm: 5,

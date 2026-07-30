@@ -245,7 +245,6 @@ const ui = {
   resultTime: document.querySelector("#result-time"),
   resultBananas: document.querySelector("#result-bananas"),
   resultBonus: document.querySelector("#result-bonus"),
-  resultMode: document.querySelector("#result-mode"),
   rankingStatus: document.querySelector("#ranking-status"),
   resultRanking: document.querySelector("#result-ranking"),
   resultRankingMessage: document.querySelector("#result-ranking-message"),
@@ -3675,8 +3674,6 @@ class GorillaRainGame {
     ui.resultTime.textContent = this.gameElapsed.toFixed(1);
     ui.resultBananas.textContent = String(this.bananaCount);
     ui.resultBonus.textContent = String(getBonusSeconds(this.bananaCount));
-    ui.resultMode.textContent =
-      `${this.profile.label}：ゲーム条件は全端末共通`;
 
     ui.resultBestScoreLabel.textContent = "端末の自己ベスト";
     const isNewRecord = this.registerScore(score);

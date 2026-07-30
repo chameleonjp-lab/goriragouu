@@ -785,6 +785,8 @@ test("プレイヤーは紫系の服を着て、実験場ランキングへ1回�
 
   assert.match(game, /color: 0x8b5cf6/);
   assert.match(game, /color: 0x4c1d95/);
+  assert.doesNotMatch(html, /id="result-mode"/);
+  assert.doesNotMatch(game, /resultMode:/);
 });
 
 test("Three.jsは固定版を使い、描画上限と使い回し用クラスを備える", async () => {
