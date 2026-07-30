@@ -3705,7 +3705,6 @@ class GorillaRainGame {
     const text = [
       "【ゴリラ豪雨】",
       "球体の島を走り、突然降るゴリラの群れから生還を目指そう。",
-      GAME_URL,
     ].join("\n");
     await this.shareContent(text, ui.homeShareButton);
   }
@@ -3718,16 +3717,20 @@ class GorillaRainGame {
       outcome,
       `生存 ${this.gameElapsed.toFixed(1)}秒 / 🍌 ${this.bananaCount}本`,
       `SCORE ${score}`,
-      GAME_URL,
     ].join("\n");
     await this.shareContent(text, ui.shareButton);
   }
 
   async shareContent(text, button) {
-    const shareData = { title: "ゴリラ豪雨", text };
+    const textWithUrl = `${text}\n${GAME_URL}`;
+    const shareData = { title: "ゴリラ豪雨", text, url: GAME_URL };
     if (navigator.share) {
       try {
-        await navigator.share(shareData);
+        const nativeShareData =
+          navigator.canShare && !navigator.canShare(shareData)
+            ? { title: "ゴリラ豪雨", text: textWithUrl }
+            : shareData;
+        await navigator.share(nativeShareData);
         return;
       } catch (error) {
         if (error?.name === "AbortError") return;
@@ -3735,7 +3738,7 @@ class GorillaRainGame {
     }
 
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(textWithUrl);
       const original = button.textContent;
       button.textContent = "コピーしました";
       window.setTimeout(() => {
