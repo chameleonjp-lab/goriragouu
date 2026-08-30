@@ -733,7 +733,7 @@ test("プレイヤーは紫系の服を着て、実験場ランキングへ1回�
   assert.match(html, /user-scalable=no/);
   assert.match(
     html,
-    /https:\/\/chameleonjp\.codeberg\.page\/chameleonjp_lab\//,
+    /https:\/\/chameleonjp-lab\.github\.io\/chameleonjp_lab\//,
   );
 
   assert.match(game, /const GAME_SLUG = "goriragouu"/);
