@@ -91,7 +91,7 @@ const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
 const GAME_SLUG = "goriragouu";
 const CLIENT_VERSION = "goriragouu_v20260729_01";
 const GAME_URL = "https://chameleonjp-lab.github.io/goriragouu/";
-const RESULT_RANKING_LIMIT = 5;
+const RESULT_RANKING_LIMIT = 10;
 const SUPABASE_URL = "https://mlpnjgezrnhdxsxolyzj.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY =
   "sb_publishable_drzcy0v97knU6FgjqSgBHw_0A9XPdFM";

@@ -428,7 +428,7 @@ export function formatScore(score) {
   return String(safeScore).padStart(6, "0");
 }
 
-export function normalizeBestRankingRows(rows, limit = 5) {
+export function normalizeBestRankingRows(rows, limit = 10) {
   if (!Array.isArray(rows)) return [];
 
   const safeLimit = Number.isFinite(limit)
