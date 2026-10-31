@@ -51,8 +51,10 @@
 
 ## 公開設定・適用順・戻し方
 
-1. GitHub Settings → Pages → Build and deployment → Source を **GitHub Actions** にする。APIでは `PATCH /repos/chameleonjp-lab/goriragouu/pages` に `{ "build_type": "workflow" }`。読み戻しはGETで `build_type=workflow`、正式html_urlを確認する。既存のbranch保護/承認は解除しない。
+1. GitHub Settings → Pages → Build and deployment → Source を **GitHub Actions** にする。APIでは `PUT /repos/chameleonjp-lab/goriragouu/pages` に `{ "build_type": "workflow" }`。読み戻しはGETで `build_type=workflow`、正式html_urlを確認する。既存のbranch保護/承認は解除しない。
 2. ユーザーがPRをmainへマージ。既存CI/Pages testが通過後、index.html/styles.css/srcのみをsiteへ集め公開。開発ファイル/秘密情報は公開しない。current main SHAに一致しない古い再実行は配備前に停止する。
 3. ActionsとPages deploymentのSHA、正式URLで15言語/任意名/音量/上位30 UIを確認。このPRの本番配備確認はマージ前には未実施。
 4. 本番テストスコアを送らず、RPCモックで匿名/空白/名前変更/消去、失敗、読み直し、重複数を確認。iPhone Safariでは縦横/キーボード/画面端、日本語変換Enter、OFF/0→再読込、Xから復帰を確認する。
 5. 問題時はrevert PRをmainへマージし同じActions経路で戻す。Pages source自体を戻す場合は元のlegacy/main/`/` を復元するが、workflow配備との二重実行を避ける。利用者データ/DBの削除は不要。
+
+2026-10-31、PR作成後に公開ジョブが走っていないことを確認し、Pagesのbuild_type=workflow変更を試行したが、GitHub APIが403 `Resource not accessible by integration` を返した。読み戻しもlegacy/main/`/` のまま。自動承認レビューの拒否ではなくGitHubトークンの権限不足であり、管理者による上記Source設定が必要。公開・マージは行っていない。
