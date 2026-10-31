@@ -94,5 +94,6 @@
   "keyRules": "핵심 규칙",
   "noscript": "이 게임을 하려면 JavaScript를 켜 주세요.",
   "volume": "음량",
-  "retryRanking": "랭킹 다시 불러오기"
+  "retryRanking": "랭킹 다시 불러오기",
+  "retryScore": "기록 다시 전송"
 }

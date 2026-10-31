@@ -94,5 +94,6 @@
   "keyRules": "主なルール",
   "noscript": "このゲームを遊ぶにはJavaScriptを有効にしてください。",
   "volume": "音量",
-  "retryRanking": "ランキングを再試行"
+  "retryRanking": "ランキングを再試行",
+  "retryScore": "記録の送信を再試行"
 }

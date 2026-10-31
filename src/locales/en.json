@@ -94,5 +94,6 @@
   "keyRules": "Key rules",
   "noscript": "Enable JavaScript to play this game.",
   "volume": "Volume",
-  "retryRanking": "Retry ranking"
+  "retryRanking": "Retry ranking",
+  "retryScore": "Retry score submission"
 }

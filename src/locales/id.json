@@ -94,5 +94,6 @@
   "keyRules": "Aturan utama",
   "noscript": "Aktifkan JavaScript untuk memainkan permainan ini.",
   "volume": "Volume",
-  "retryRanking": "Coba lagi peringkat"
+  "retryRanking": "Coba lagi peringkat",
+  "retryScore": "Coba kirim skor lagi"
 }

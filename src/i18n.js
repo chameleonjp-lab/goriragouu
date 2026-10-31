@@ -8,6 +8,7 @@ const KEY = 'goriragouu-language';
 const FALLBACK_ENGLISH = {
   "volume": "Volume",
   "retryRanking": "Retry ranking",
+  "retryScore": "Retry score submission",
   "gameTitle": "Gorilla Downpour",
   "eyebrow": "3D survival",
   "loading": "Preparing the spherical island…",

@@ -94,5 +94,6 @@
   "keyRules": "Regole principali",
   "noscript": "Attiva JavaScript per giocare.",
   "volume": "Volume",
-  "retryRanking": "Riprova classifica"
+  "retryRanking": "Riprova classifica",
+  "retryScore": "Riprova invio del punteggio"
 }

@@ -94,5 +94,6 @@
   "keyRules": "กติกาหลัก",
   "noscript": "โปรดเปิดใช้ JavaScript เพื่อเล่นเกมนี้",
   "volume": "ระดับเสียง",
-  "retryRanking": "โหลดอันดับอีกครั้ง"
+  "retryRanking": "โหลดอันดับอีกครั้ง",
+  "retryScore": "ส่งคะแนนอีกครั้ง"
 }

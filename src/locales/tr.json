@@ -94,5 +94,6 @@
   "keyRules": "Temel kurallar",
   "noscript": "Bu oyunu oynamak için JavaScript'i etkinleştirin.",
   "volume": "Ses düzeyi",
-  "retryRanking": "Sıralamayı yeniden yükle"
+  "retryRanking": "Sıralamayı yeniden yükle",
+  "retryScore": "Puanı yeniden gönder"
 }

@@ -1,3 +1,4 @@
+import './score-queue.js';
 import { t, setText, initI18n } from "./i18n.js";
 initI18n();
 window.__GORILLA_RAIN_READY__ = false;
@@ -232,6 +233,7 @@ const ui = {
   homeSoundButton: document.querySelector("#home-sound-button"),
   soundVolume: document.querySelector("#sound-volume"),
   retryRanking: document.querySelector("#retry-ranking"),
+  retryScore: document.querySelector("#retry-score"),
   motionButton: document.querySelector("#motion-button"),
   controlTitle: document.querySelector("#control-title"),
   controlDetail: document.querySelector("#control-detail"),
@@ -520,35 +522,32 @@ class RankingClient {
     return this.clientPromise;
   }
 
-  async submit(displayName, score) {
-    const client = await this.connect();
-    if (!client) throw new Error("ranking client unavailable");
+  async request(name, payload) {
+    const controller = new AbortController();
+    let timeout;
+    const deadline = new Promise((_, reject) => { timeout = setTimeout(() => { controller.abort(); reject(new Error("Ranking request timed out")); }, 8000); });
+    try {
+      return await Promise.race([deadline, (async () => {
+        const client = await this.connect();
+        if (!client || controller.signal.aborted) throw new Error("ranking client unavailable");
+        const {data,error} = await client.rpc(name,payload).abortSignal(controller.signal);
+        if (error) throw error;
+        return data;
+      })()]);
+    } finally { clearTimeout(timeout); }
+  }
 
-    const { data, error } = await client.rpc("submit_score", {
-      p_display_name: displayName,
-      p_game_slug: GAME_SLUG,
-      p_score: Math.trunc(Number(score || 0)),
-      p_client_version: CLIENT_VERSION,
-    });
-    if (error) throw error;
-
+  async submit(payload) {
+    const data = await this.request("submit_score_once_shared_v1", payload);
     const result = Array.isArray(data) ? data[0] : data;
     if (!result || result.accepted !== true) {
-      throw new Error("score was not accepted");
+      const error = new Error("score was not accepted");error.code="PT422";throw error;
     }
     return result;
   }
 
   async getBestScores(limit = RESULT_RANKING_LIMIT) {
-    const client = await this.connect();
-    if (!client) throw new Error("ranking client unavailable");
-
-    const { data, error } = await client.rpc("get_best_score_ranking", {
-      p_game_slug: GAME_SLUG,
-      p_limit: limit,
-    });
-    if (error) throw error;
-    return Array.isArray(data) ? data : [];
+    return this.request("get_best_score_ranking", {p_game_slug: GAME_SLUG,p_limit: limit});
   }
 }
 
@@ -1536,6 +1535,10 @@ class GorillaRainGame {
 
     this.sound = new AudioController();
     this.ranking = new RankingClient();
+    this.scorePlay = null;
+    this.scoreQueue = globalThis.CommonScoreQueue.createScoreQueue({gameSlug:GAME_SLUG,
+      storage:(()=>{try{return localStorage;}catch{return null;}})(),
+      send:payload=>this.ranking.submit(payload),onChange:(item,receipt)=>this.onScoreQueueChange(item,receipt)});
     this.motionEnabled =
       safeStorageGet("goriragouu-motion", "off") === "on" &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1668,6 +1671,9 @@ class GorillaRainGame {
     window.__GORILLA_RAIN_READY__ = true;
     ui.loading.hidden = true;
     this.renderer.setAnimationLoop((time) => this.frame(time));
+    this.restorePendingResult();
+    window.addEventListener("online", () => { void this.scoreQueue.drain(); });
+    void this.scoreQueue.drain();
   }
 
   initializeRenderer() {
@@ -2292,6 +2298,7 @@ class GorillaRainGame {
     ui.soundVolume.value = String(this.sound.volume * 100);
     ui.soundVolume.addEventListener("input", () => this.sound.setVolume(Number(ui.soundVolume.value) / 100));
     ui.retryRanking.addEventListener("click", () => { void this.loadResultRanking(this.scoreSubmissionRunId); });
+    ui.retryScore.addEventListener("click", () => { void this.scoreQueue.drain(); });
     ui.motionButton.addEventListener("click", () => {
       this.motionEnabled = !this.motionEnabled;
       safeStorageSet("goriragouu-motion", this.motionEnabled ? "on" : "off");
@@ -2368,6 +2375,7 @@ class GorillaRainGame {
   }
 
   returnHome() {
+    this.scorePlay = null;
     this.controls.reset();
     ui.app.classList.remove("is-playing", "is-boosting");
     document.body.classList.remove("is-playing");
@@ -2473,56 +2481,41 @@ class GorillaRainGame {
     }
   }
 
-  async submitGameScore(score, runId) {
-    if (
-      runId !== this.scoreSubmissionRunId ||
-      this.scoreSubmitAttempted ||
-      this.scoreSubmitFinished
-    ) {
-      return;
-    }
-
-    this.scoreSubmitAttempted = true;
-    const displayName = normalizeDisplayName(this.displayName);
-    if (!displayName) {
-      this.setRankingStatus(
-        "notPublished",
-        "guest",
-      );
-      this.setLabNavigationLocked(false);
-      void this.loadResultRanking(runId);
-      return;
-    }
-
-    this.setRankingStatus("submitting");
-    try {
-      const result = await this.ranking.submit(displayName, score);
-      if (runId !== this.scoreSubmissionRunId) return;
-
+  onScoreQueueChange(item, result) {
+    if (item.id !== this.scorePlay?.id || this.mode !== "result") return;
+    ui.retryScore.hidden = item.state !== "pending";
+    if (item.state === "sending") this.setRankingStatus("submitting");
+    else if (item.state === "submitted") {
       this.scoreSubmitFinished = true;
-      const registeredBest = Number(result.result_best_score);
-      if (Number.isFinite(registeredBest)) {
-        setText(ui.resultBestScoreLabel, "registeredBest");
-        ui.resultBestScore.textContent = formatScore(registeredBest);
-      }
-      this.setRankingStatus(
-        result.is_new_best ? "submittedBest" : "submitted",
-        "success",
-        {name: displayName},
-      );
-    } catch (error) {
-      if (runId !== this.scoreSubmissionRunId) return;
-      console.warn("ランキング送信に失敗しました。", error);
-      this.setRankingStatus(
-        "submitFailed",
-        "error",
-      );
-    } finally {
-      if (runId === this.scoreSubmissionRunId) {
-        this.setLabNavigationLocked(false);
-        void this.loadResultRanking(runId);
-      }
-    }
+      setText(ui.resultBestScoreLabel, "registeredBest");
+      ui.resultBestScore.textContent = formatScore(result.result_best_score);
+      this.setRankingStatus(result.is_new_best ? "submittedBest" : "submitted", "success", {name:item.payload.p_display_name});
+      void this.loadResultRanking(this.scoreSubmissionRunId);
+    } else this.setRankingStatus("submitFailed", "error");
+  }
+
+  restorePendingResult() {
+    const item = this.scoreQueue.list().at(-1), saved = item?.presentation;
+    if (!saved || !Number.isFinite(saved.gameElapsed) || !Number.isInteger(saved.bananaCount) || calculateScore(saved.gameElapsed,saved.bananaCount)!==item.payload.p_score) return;
+    this.scorePlay = {id:item.id,name:item.payload.p_display_name,clientVersion:item.payload.p_client_version};
+    this.displayName = this.scorePlay.name;
+    this.gameElapsed = saved.gameElapsed;this.bananaCount = saved.bananaCount;
+    this.scoreSubmitAttempted = true;this.restoringResult = true;
+    this.finishGame(saved.cleared === true);
+    this.restoringResult = false;
+    this.onScoreQueueChange(item,null);
+    void this.loadResultRanking(this.scoreSubmissionRunId);
+  }
+
+  async submitGameScore(score, runId) {
+    if (runId !== this.scoreSubmissionRunId || this.scoreSubmitAttempted || this.scoreSubmitFinished) return;
+    this.scoreSubmitAttempted = true;
+    this.setLabNavigationLocked(false);
+    void this.loadResultRanking(runId);
+    if (!this.displayName) { this.setRankingStatus("notPublished","guest"); return; }
+    if (!this.scorePlay) { this.setRankingStatus("submitFailed","error"); return; }
+    this.scoreQueue.enqueue(this.scorePlay,score,{gameElapsed:this.gameElapsed,bananaCount:this.bananaCount,cleared:this.lastCleared});
+    await this.scoreQueue.drain();
   }
 
   showBananaScoreEffect() {
@@ -2635,6 +2628,8 @@ class GorillaRainGame {
     this.straightStormRandom = new SeededRandom(this.seed ^ 0x6a09e667);
     this.bananaField.random = this.random;
     this.scoreSubmissionRunId += 1;
+    this.scorePlay = this.scoreQueue.capture(this.displayName, CLIENT_VERSION);
+    ui.retryScore.hidden = true;
     this.scoreSubmitAttempted = false;
     this.scoreSubmitFinished = false;
     this.setLabNavigationLocked(false);
@@ -3702,7 +3697,7 @@ class GorillaRainGame {
     ui.resultBonus.textContent = String(getBonusSeconds(this.bananaCount));
 
     setText(ui.resultBestScoreLabel, "localBest");
-    const isNewRecord = this.registerScore(score);
+    const isNewRecord = this.restoringResult ? false : this.registerScore(score);
     if (ui.resultNewRecord) ui.resultNewRecord.hidden = !isNewRecord;
 
     this.sound.stop();
@@ -3711,13 +3706,13 @@ class GorillaRainGame {
       setText(ui.resultKicker, "survived");
       setText(ui.resultTitle, "clearTitle");
       setText(ui.resultMessage, "clearMessage");
-      this.sound.clear();
+      if (!this.restoringResult) this.sound.clear();
     } else {
       ui.resultIcon.textContent = "🦍";
       setText(ui.resultKicker, "caught");
       setText(ui.resultTitle, "caughtTitle");
       setText(ui.resultMessage, "caughtMessage");
-      this.sound.gameOver();
+      if (!this.restoringResult) this.sound.gameOver();
     }
     this.showScreen("result");
     ui.result.scrollTop = 0;

@@ -110,6 +110,7 @@
   "volumeZeroReload": true,
   "rankingRows": 30,
   "rankingRetryAndStaleGuard": true,
+  "namedReceiptReload": true,
   "pausedLanguageChange": {
     "before": {
       "elapsed": 12.3,
@@ -125,6 +126,5 @@
     }
   },
   "errors": [],
-  "blockedSupabase": [],
-  "note": "Local Chromium with verified CDN bytes fulfilled; 402x874 and874x402. Result/score values synthetic. Not iPhone Safari or live ranking submission. Screenshot after reload is home, not completed result."
+  "blockedSupabase": []
 }

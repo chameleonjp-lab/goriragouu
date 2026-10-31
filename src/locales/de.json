@@ -94,5 +94,6 @@
   "keyRules": "Wichtigste Regeln",
   "noscript": "Aktiviere JavaScript, um zu spielen.",
   "volume": "Lautstärke",
-  "retryRanking": "Rangliste erneut laden"
+  "retryRanking": "Rangliste erneut laden",
+  "retryScore": "Punktestand erneut senden"
 }

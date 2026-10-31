@@ -94,5 +94,6 @@
   "keyRules": "主要規則",
   "noscript": "請啟用JavaScript後遊玩。",
   "volume": "音量",
-  "retryRanking": "重試排行榜"
+  "retryRanking": "重試排行榜",
+  "retryScore": "重試提交成績"
 }

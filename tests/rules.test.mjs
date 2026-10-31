@@ -743,8 +743,8 @@ test("プレイヤーは紫系の服を着て、実験場ランキングへ1回�
     /const GAME_URL = "https:\/\/chameleonjp-lab\.github\.io\/goriragouu\/"/,
   );
   assert.match(game, /supabase-js@2\.110\.9\/\+esm/);
-  assert.match(game, /\.rpc\("submit_score"/);
-  assert.match(game, /\.rpc\("get_best_score_ranking"/);
+  assert.match(game, /this\.request\("submit_score_once_shared_v1"/);
+  assert.match(game, /this\.request\("get_best_score_ranking"/);
   assert.match(game, /p_game_slug:\s*GAME_SLUG/);
   assert.match(game, /p_limit:\s*limit/);
   assert.match(game, /const RESULT_RANKING_LIMIT = 30/);
