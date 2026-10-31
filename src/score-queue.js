@@ -56,7 +56,8 @@
           try {
             const response = await send(copy(item.payload));
             const receipt = Array.isArray(response) ? response[0] : response;
-            if (receipt?.accepted !== true) { const error=new Error('Score rejected');error.code='PT422';throw error; }
+            if (receipt?.accepted === false) { const error=new Error('Score rejected');error.code='PT422';throw error; }
+            if (receipt?.accepted !== true) throw new Error('Invalid score acknowledgement');
             if (receipt.result_display_name !== item.payload.p_display_name || receipt.result_normalized_name !== item.payload.p_display_name || !Number.isInteger(receipt.result_first_score) || !Number.isInteger(receipt.result_best_score) || !Number.isInteger(receipt.result_play_count) || receipt.result_play_count < 1 || typeof receipt.was_duplicate !== 'boolean') throw new Error('Invalid score acknowledgement');
             item.state='submitted';
             memory.delete(item.id);

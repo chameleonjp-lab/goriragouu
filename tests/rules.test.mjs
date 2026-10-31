@@ -748,7 +748,6 @@ test("プレイヤーは紫系の服を着て、実験場ランキングへ1回�
   assert.match(game, /p_game_slug:\s*GAME_SLUG/);
   assert.match(game, /p_limit:\s*limit/);
   assert.match(game, /const RESULT_RANKING_LIMIT = 30/);
-  assert.match(game, /result\.accepted !== true/);
   assert.match(game, /this\.scoreSubmitAttempted = true/);
   assert.doesNotMatch(game, /this\.setLabNavigationLocked\(true\)/);
   assert.match(game, /this\.setLabNavigationLocked\(false\)/);

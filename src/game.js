@@ -540,9 +540,10 @@ class RankingClient {
   async submit(payload) {
     const data = await this.request("submit_score_once_shared_v1", payload);
     const result = Array.isArray(data) ? data[0] : data;
-    if (!result || result.accepted !== true) {
+    if (result?.accepted === false) {
       const error = new Error("score was not accepted");error.code="PT422";throw error;
     }
+    if (result?.accepted !== true) throw new Error("Invalid score acknowledgement");
     return result;
   }
 

@@ -15,3 +15,11 @@ test('a stalled SDK connection times out without sending a late score',async()=>
  const request=f.client.submit({p_submission_id:'captured'});f.expire();await assert.rejects(request,/timed out/);
  resolve({rpc(){calls++;throw Error('must not send after timeout')}});await Promise.resolve();await Promise.resolve();assert.equal(calls,0);
 });
+test('only explicit server rejection is permanent; missing accepted stays retryable',async()=>{
+ for (const response of [null,{},[],{accepted:false},{accepted:'true'}]) {
+  const f=fixture();f.client.request=async()=>response;
+  await assert.rejects(f.client.submit({p_submission_id:'captured'}),error=>{
+   assert.equal(error.code,response?.accepted===false?'PT422':undefined);return true;
+  });
+ }
+});

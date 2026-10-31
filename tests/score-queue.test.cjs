@@ -30,3 +30,14 @@ test('corrupt stored status is preserved without restoring or sending it',()=>{
  const q=createScoreQueue({gameSlug:'test',storage:store,send:()=>{throw Error('must not send')}});
  assert.equal(q.list().length,0);assert.notEqual(store.getItem('test:score-pending:v1:'+ID),null);
 });
+
+test('missing or malformed accepted flag retains the same UUID for a later valid acknowledgement',async()=>{
+ for (const response of [null,undefined,{},[],{accepted:0},{accepted:'true'}]) {
+  const disk=storage(),calls=[];let valid=false;
+  const send=async payload=>{calls.push(payload);return valid?receipt(payload.p_score):response};
+  const q=createScoreQueue({gameSlug:'test',storage:disk,uuid:()=>ID,send});
+  q.enqueue(q.capture('Alice','v1'),10);await q.drain();assert.equal(q.list()[0].state,'pending');
+  valid=true;const reload=createScoreQueue({gameSlug:'test',storage:disk,send});await reload.drain();
+  assert.equal(reload.list().length,0);assert.equal(calls.length,2);assert.deepEqual(calls[0],calls[1]);
+ }
+});
