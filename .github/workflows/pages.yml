@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -48,11 +48,22 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
+      - name: Prepare runtime files only
+        run: |
+          mkdir -p site
+          cp index.html styles.css site/
+          cp -R src site/
+          touch site/.nojekyll
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: site
 
+      - name: Reject superseded revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: test "$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq .object.sha)" = "$TARGET_SHA"
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

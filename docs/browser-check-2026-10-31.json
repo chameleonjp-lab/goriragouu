@@ -1,0 +1,130 @@
+{
+  "checks": [
+    {
+      "locale": "de",
+      "title": "Gorillaregen",
+      "share": "Auf X teilen",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "en",
+      "title": "Gorilla Downpour",
+      "share": "Share on X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "es",
+      "title": "Lluvia de gorilas",
+      "share": "Compartir en X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "fr",
+      "title": "Pluie de gorilles",
+      "share": "Partager sur X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "id",
+      "title": "Hujan Gorila",
+      "share": "Bagikan di X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "it",
+      "title": "Pioggia di gorilla",
+      "share": "Condividi su X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "ja",
+      "title": "ゴリラ豪雨",
+      "share": "Xでシェア",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "ko",
+      "title": "고릴라 폭우",
+      "share": "X에 공유",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "pt-BR",
+      "title": "Chuva de Gorilas",
+      "share": "Compartilhar no X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "ru",
+      "title": "Гориллий ливень",
+      "share": "Поделиться в X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "th",
+      "title": "ฝนกอริลลา",
+      "share": "แชร์บน X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "tr",
+      "title": "Goril Sağanağı",
+      "share": "X'te paylaş",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "vi",
+      "title": "Mưa khỉ đột",
+      "share": "Chia sẻ lên X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "zh-Hans",
+      "title": "猩猩暴雨",
+      "share": "分享到X",
+      "overflow": false,
+      "audio": "off"
+    },
+    {
+      "locale": "zh-Hant",
+      "title": "猩猩暴雨",
+      "share": "分享到X",
+      "overflow": false,
+      "audio": "off"
+    }
+  ],
+  "firstMuteWithoutAudioContext": true,
+  "volumeZeroReload": true,
+  "rankingRows": 30,
+  "rankingRetryAndStaleGuard": true,
+  "pausedLanguageChange": {
+    "before": {
+      "elapsed": 12.3,
+      "banana": 2,
+      "run": 1,
+      "mode": "paused"
+    },
+    "after": {
+      "elapsed": 12.3,
+      "banana": 2,
+      "run": 1,
+      "mode": "paused"
+    }
+  },
+  "errors": [],
+  "blockedSupabase": [],
+  "note": "Local Chromium with verified CDN bytes fulfilled; 402x874 and874x402. Result/score values synthetic. Not iPhone Safari or live ranking submission. Screenshot after reload is home, not completed result."
+}

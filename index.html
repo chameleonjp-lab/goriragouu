@@ -7,14 +7,14 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
     />
     <meta
-      name="description"
+      name="description" data-i18n="intro" data-i18n-attr="content"
       content="球体の島を駆け回り、空から降るゴリラ豪雨を60秒間かわす3Dブラウザゲーム。"
     />
     <meta name="theme-color" content="#071d20" />
     <meta name="color-scheme" content="dark" />
-    <meta property="og:title" content="ゴリラ豪雨" />
+    <meta property="og:title" data-i18n="gameTitle" data-i18n-attr="content" content="ゴリラ豪雨" />
     <meta
-      property="og:description"
+      property="og:description" data-i18n="intro" data-i18n-attr="content"
       content="球体の島を駆け回り、空から突然降るゴリラ豪雨から逃げる3Dブラウザゲーム。"
     />
     <meta
@@ -36,140 +36,126 @@
 
       <div id="loading" class="loading" role="status" aria-live="polite">
         <div class="loading-mark" aria-hidden="true">🦍</div>
-        <p id="loading-message">球体の島を準備中…</p>
+        <p id="loading-message" data-i18n="loading">球体の島を準備中…</p>
       </div>
 
       <main id="home-screen" class="screen home-screen" aria-labelledby="game-title" hidden>
         <section class="hero-card">
-          <p class="eyebrow">3D SURVIVAL RUN</p>
-          <h1 id="game-title">
-            <span>ゴリラ</span>
-            <span class="rain-title">豪雨</span>
-          </h1>
-          <p class="lead">
-            空から降り注ぐゴリラの群れ。<br />
-            小さな球体の島を走り、60秒間逃げ切ろう。<br />
-            豪雨は突然降る。同じ方向へ走り続けると前方も狙われる。
-          </p>
+          <p class="eyebrow" data-i18n="eyebrow">3D SURVIVAL RUN</p>
+          <h1 id="game-title" data-i18n="gameTitle">ゴリラ豪雨</h1>
+          <p class="lead" data-i18n="intro">球体の島を走り、突然降るゴリラから60秒間逃げ切ろう。同じ方向へ走り続けると前方も狙われる。</p>
 
-          <div class="rule-strip" aria-label="主なルール">
-            <div><b>🦍</b><span>接触で終了</span></div>
-            <div><b>🍌</b><span>加速2秒<br />10本で+5秒</span></div>
-            <div><b>🪨 🌲</b><span>石は減速<br />木は半透明の壁</span></div>
+          <div class="rule-strip" aria-label="主なルール" data-i18n="keyRules" data-i18n-attr="aria-label">
+            <div><b>🦍</b><span data-i18n="contactRule">接触で終了</span></div>
+            <div><b>🍌</b><span data-i18n="bananaRule">加速2秒・10本で+5秒</span></div>
+            <div><b>🪨 🌲</b><span data-i18n="obstacleRule">石は減速・木は壁</span></div>
           </div>
 
           <label class="player-name-card" for="player-name-input">
-            <span>ランキング名</span>
+            <span data-i18n="nameLabel">ランキング名</span>
             <input
               id="player-name-input"
               type="text"
               maxlength="10"
               autocomplete="nickname"
               enterkeyhint="done"
-              placeholder="10文字まで"
-              aria-describedby="player-name-message"
-              required
+              placeholder="10文字まで" data-i18n="namePlaceholder" data-i18n-attr="placeholder"
+              aria-describedby="player-name-help player-name-message"
             />
-            <small id="player-name-message" role="status" aria-live="polite">
-              最初に名前を入力してください。次回から保存されます。
-            </small>
+            <small id="player-name-help" data-i18n="nameHelp">名前を入力すると、名前と記録がランキングに公開されます。空欄でも遊べます。</small>
+            <small id="player-name-message" role="status" aria-live="polite"></small>
           </label>
 
           <div id="home-best-score" class="best-score-note">
-            <span>端末の自己ベスト</span>
+            <span data-i18n="localBest">端末の自己ベスト</span>
             <strong id="home-best-score-value">------</strong>
           </div>
 
           <button id="start-button" class="primary-button" type="button">
-            <span>豪雨の中へ</span>
-            <small>タップしてスタート</small>
+            <span data-i18n="start">豪雨の中へ</span>
+            <small data-i18n="startHint">タップしてスタート</small>
           </button>
 
           <div class="control-note">
             <span class="control-icon" aria-hidden="true">↗</span>
             <p>
-              <strong id="control-title">スワイプで移動</strong>
-              <span id="control-detail">画面の中央寄りを押したまま、逃げたい方向へ滑らせます。</span>
+              <strong id="control-title" data-i18n="mobileTitle">スワイプで移動</strong>
+              <span id="control-detail" data-i18n="mobileDetail">画面の中央寄りを押したまま、逃げたい方向へ滑らせます。</span>
             </p>
           </div>
 
           <details class="rules-details">
-            <summary>ルール説明</summary>
+            <summary data-i18n="rules">ルール説明</summary>
             <ul>
-              <li>ゴリラに触れると、その場でゲーム終了です。</li>
-              <li>石に触れている間は減速し、半透明の木は通り抜けられません。</li>
-              <li>バナナ1本で100点と2秒の加速。10本ごとに残り時間が5秒増えます。</li>
-              <li>同じ方向へ走り続けると、通常とは別の豪雨が前方へ現れます。</li>
+              <li data-i18n="rule1">ゴリラに触れると、その場でゲーム終了です。</li>
+              <li data-i18n="rule2">石に触れている間は減速し、半透明の木は通り抜けられません。</li>
+              <li data-i18n="rule3">バナナ1本で100点と2秒の加速。10本ごとに残り時間が5秒増えます。</li>
+              <li data-i18n="rule4">同じ方向へ走り続けると、通常とは別の豪雨が前方へ現れます。</li>
             </ul>
           </details>
 
+          <label class="language-control"><span data-i18n="language">言語</span><select id="language-select"></select></label>
           <div class="home-options">
             <button
               id="motion-button"
               class="option-button"
               type="button"
               aria-pressed="false"
-            >
-              揺れ：なし
-            </button>
+             data-i18n="motionOff">揺れ：なし</button>
             <button
               id="home-sound-button"
               class="option-button"
               type="button"
-              aria-pressed="false"
-            >
-              音：なし
-            </button>
+              aria-pressed="true"
+             data-i18n="soundOn">音：あり</button>
           </div>
 
-          <nav class="home-links" aria-label="関連メニュー">
-            <button id="home-share-button" class="text-link-button" type="button">
-              ゲームをシェア
-            </button>
+          <label class="volume-control"><span data-i18n="volume">音量</span><input id="sound-volume" type="range" min="0" max="100" value="100" aria-label="音量" data-i18n="volume" data-i18n-attr="aria-label" /></label>
+
+          <nav class="home-links" aria-label="関連メニュー" data-i18n="menu" data-i18n-attr="aria-label">
+            <button id="home-share-button" class="text-link-button" type="button" data-i18n="share">Xでシェア</button>
             <a
               id="home-lab-link"
-              href="https://chameleonjp-lab.github.io/chameleonjp_lab/"
-            >
-              カメレオンJPの実験場へ
-            </a>
+              href="https://chameleonjp-lab.github.io/chameleonjp_lab/ranking.html?game=goriragouu"
+             data-i18n="ranking">ランキング</a>
           </nav>
         </section>
       </main>
 
-      <section id="game-screen" class="screen game-screen" aria-label="ゲーム画面" hidden>
-        <div id="game-input" class="game-input" aria-label="移動操作エリア"></div>
+      <section id="game-screen" class="screen game-screen" aria-label="ゲーム画面" data-i18n="gameScreen" data-i18n-attr="aria-label" hidden>
+        <div id="game-input" class="game-input" aria-label="移動操作エリア" data-i18n="moveArea" data-i18n-attr="aria-label"></div>
 
         <header class="hud">
           <div class="hud-card score-card">
-            <span>SCORE</span>
+            <span data-i18n="score">SCORE</span>
             <strong id="score-value">000000</strong>
           </div>
 
           <div id="timer-card" class="timer-card" style="--time-progress: 1turn">
             <div>
-              <span>TIME</span>
+              <span data-i18n="time">TIME</span>
               <strong id="time-value">60.0</strong>
             </div>
           </div>
 
           <div class="hud-card banana-card">
-            <span>BANANA</span>
+            <span data-i18n="bananas">BANANA</span>
             <strong><i aria-hidden="true">🍌</i><b id="banana-value">0</b></strong>
-            <small id="banana-next">あと10本で +5秒</small>
+            <small id="banana-next" data-i18n="bananaNext" data-i18n-params='{"count":10}'>あと10本で +5秒</small>
           </div>
         </header>
 
         <div class="phase-panel">
           <span id="phase-dot" aria-hidden="true"></span>
           <p>
-            <small>ゴリラ豪雨</small>
-            <strong id="phase-value">1地点</strong>
+            <small data-i18n="gameTitle">ゴリラ豪雨</small>
+            <strong id="phase-value" data-i18n="phase" data-i18n-params='{"count":1}'>1地点</strong>
           </p>
         </div>
 
         <div id="boost-badge" class="boost-badge" hidden>
           <span aria-hidden="true">⚡</span>
-          <p>加速中 <strong id="boost-value">2.0</strong>秒</p>
+          <p><span data-i18n="boost">加速中</span> <strong id="boost-value">2.0</strong><span data-i18n="seconds">秒</span></p>
         </div>
 
         <div id="banana-score-fx" class="banana-score-fx" aria-hidden="true">
@@ -184,7 +170,7 @@
           <i style="--spark-x: -42px; --spark-y: 18px"></i>
         </div>
 
-        <button id="pause-button" class="round-button pause-button" type="button" aria-label="一時停止">
+        <button id="pause-button" class="round-button pause-button" type="button" aria-label="一時停止" data-i18n="pause" data-i18n-attr="aria-label">
           Ⅱ
         </button>
 
@@ -192,7 +178,7 @@
           id="sound-button"
           class="round-button sound-button"
           type="button"
-          aria-label="音を切り替える"
+          aria-label="音を切り替える" data-i18n="soundToggle" data-i18n-attr="aria-label"
           aria-pressed="false"
         >
           ×
@@ -204,7 +190,7 @@
 
         <div id="countdown" class="countdown" aria-live="assertive" hidden>
           <strong id="countdown-value">3</strong>
-          <span>逃げる準備！</span>
+          <span data-i18n="getReady">逃げる準備！</span>
         </div>
 
         <div
@@ -216,12 +202,10 @@
           hidden
         >
           <div>
-            <p class="eyebrow">PAUSED</p>
-            <h2 id="pause-title">いったん停止中</h2>
-            <p>時間もゴリラも止まっています。</p>
-            <button id="resume-button" class="primary-button compact" type="button">
-              ゲームへ戻る
-            </button>
+            <p class="eyebrow" data-i18n="paused">PAUSED</p>
+            <h2 id="pause-title" data-i18n="paused">いったん停止中</h2>
+            <p data-i18n="pauseDetail">時間もゴリラも止まっています。</p>
+            <button id="resume-button" class="primary-button compact" type="button" data-i18n="resume">ゲームへ戻る</button>
           </div>
         </div>
 
@@ -231,38 +215,36 @@
       <main id="result-screen" class="screen result-screen" aria-labelledby="result-title" hidden>
         <section class="result-card">
           <div id="result-icon" class="result-icon" aria-hidden="true">🌤️</div>
-          <p id="result-kicker" class="eyebrow">SURVIVED</p>
-          <h2 id="result-title" tabindex="-1">ゴリラ豪雨を生還！</h2>
-          <p id="result-message" class="result-message">
-            最後まで逃げ切りました。
-          </p>
+          <p id="result-kicker" class="eyebrow" data-i18n="survived">SURVIVED</p>
+          <h2 id="result-title" tabindex="-1" data-i18n="clearTitle">ゴリラ豪雨を生還！</h2>
+          <p id="result-message" class="result-message" data-i18n="clearMessage">最後まで逃げ切りました。</p>
 
           <div class="final-score">
-            <span>FINAL SCORE</span>
+            <span data-i18n="finalScore">FINAL SCORE</span>
             <strong id="result-score">000000</strong>
           </div>
 
           <p id="result-new-record" class="new-record-badge" hidden>
-            <span aria-hidden="true">🏆</span> 自己ベスト更新！
+            <span aria-hidden="true">🏆</span> <span data-i18n="newBest">自己ベスト更新！</span>
           </p>
 
           <div id="result-best-score" class="best-score-note">
-            <span id="result-best-score-label">端末の自己ベスト</span>
+            <span id="result-best-score-label" data-i18n="localBest">端末の自己ベスト</span>
             <strong id="result-best-score-value">------</strong>
           </div>
 
           <dl class="result-stats">
             <div>
-              <dt>生存時間</dt>
-              <dd><strong id="result-time">60.0</strong><span>秒</span></dd>
+              <dt data-i18n="survivalTime">生存時間</dt>
+              <dd><strong id="result-time">60.0</strong><span data-i18n="seconds">秒</span></dd>
             </div>
             <div>
-              <dt>バナナ</dt>
-              <dd><strong id="result-bananas">0</strong><span>本</span></dd>
+              <dt data-i18n="bananas">バナナ</dt>
+              <dd><strong id="result-bananas">0</strong><span data-i18n="bananaUnit">本</span></dd>
             </div>
             <div>
-              <dt>時間追加</dt>
-              <dd><strong id="result-bonus">0</strong><span>秒</span></dd>
+              <dt data-i18n="bonusTime">時間追加</dt>
+              <dd><strong id="result-bonus">0</strong><span data-i18n="seconds">秒</span></dd>
             </div>
           </dl>
 
@@ -271,28 +253,18 @@
             class="ranking-status"
             role="status"
             aria-live="polite"
-          >
-            結果はゲーム終了時にランキングへ自動送信します。
-          </p>
+           data-i18n="pending">結果はゲーム終了時にランキングへ自動送信します。</p>
 
           <div class="result-actions">
-            <button id="replay-button" class="primary-button" type="button">
-              もう一度逃げる
-            </button>
-            <button id="share-button" class="secondary-button" type="button">
-              結果をシェア
-            </button>
-            <button id="result-home-button" class="secondary-button" type="button">
-              ゲーム終了
-            </button>
+            <button id="replay-button" class="primary-button" type="button" data-i18n="retry">もう一度逃げる</button>
+            <button id="share-button" class="secondary-button" type="button" data-i18n="share">Xでシェア</button>
+            <button id="result-home-button" class="secondary-button" type="button" data-i18n="home">ゲーム終了</button>
             <a
               id="result-lab-link"
               class="secondary-button action-link"
-              href="https://chameleonjp-lab.github.io/chameleonjp_lab/"
+              href="https://chameleonjp-lab.github.io/chameleonjp_lab/ranking.html?game=goriragouu"
               aria-disabled="true"
-            >
-              他のゲームで遊ぶ
-            </a>
+             data-i18n="ranking">ランキング</a>
           </div>
 
           <section
@@ -303,23 +275,22 @@
           >
             <div class="result-ranking-heading">
               <div>
-                <p class="eyebrow">BEST SCORE</p>
-                <h3 id="result-ranking-title">最高スコアランキング</h3>
+                <p class="eyebrow" data-i18n="localBest">BEST SCORE</p>
+                <h3 id="result-ranking-title" data-i18n="rankingTitle">最高スコアランキング</h3>
               </div>
-              <span>TOP 10</span>
+              <span data-i18n="top30">TOP 30</span>
             </div>
             <p
               id="result-ranking-message"
               class="result-ranking-message"
               role="status"
               aria-live="polite"
-            >
-              ランキングを読み込みます…
-            </p>
+             data-i18n="rankingLoading">ランキングを読み込みます…</p>
+            <button id="retry-ranking" type="button" class="option-button" data-i18n="retryRanking">ランキングを再試行</button>
             <ol
               id="result-ranking-list"
               class="result-ranking-list"
-              aria-label="最高スコア上位5件"
+              aria-label="最高スコア上位30名" data-i18n="top30" data-i18n-attr="aria-label"
               hidden
             ></ol>
             <a
@@ -327,9 +298,7 @@
               class="result-ranking-link"
               href="https://chameleonjp-lab.github.io/chameleonjp_lab/ranking.html?game=goriragouu"
               aria-disabled="true"
-            >
-              100位までの詳細ランキングを見る
-            </a>
+             data-i18n="ranking">ランキング</a>
           </section>
         </section>
       </main>
@@ -337,29 +306,16 @@
       <div id="webgl-error" class="fatal-error" role="alert" hidden>
         <div>
           <span aria-hidden="true">🦍</span>
-          <h2 id="webgl-error-title">3D画面を開けませんでした</h2>
-          <p id="webgl-error-message">
-            WebGLが使える最新のSafari、Chrome、Edgeで開き直してください。
-          </p>
+          <h2 id="webgl-error-title" data-i18n="webglTitle">3D画面を開けませんでした</h2>
+          <p id="webgl-error-message" data-i18n="webglDetail">WebGLが使える最新のSafari、Chrome、Edgeで開き直してください。</p>
         </div>
       </div>
     </div>
 
     <noscript>
-      <p class="noscript">このゲームを遊ぶにはJavaScriptを有効にしてください。</p>
+      <p class="noscript" data-i18n="noscript">このゲームを遊ぶにはJavaScriptを有効にしてください。</p>
     </noscript>
 
-    <script>
-      window.__GORILLA_RAIN_READY__ = false;
-      window.setTimeout(() => {
-        if (window.__GORILLA_RAIN_READY__) return;
-        const message = document.querySelector("#loading-message");
-        if (message) {
-          message.textContent =
-            "読み込みに時間がかかっています。通信状態を確認して、ページを開き直してください。";
-        }
-      }, 12000);
-    </script>
     <script type="module" src="./src/game.js"></script>
   </body>
 </html>

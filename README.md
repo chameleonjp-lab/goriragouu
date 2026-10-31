@@ -91,3 +91,5 @@ npm test
 ```text
 https://chameleonjp-lab.github.io/goriragouu/
 ```
+
+共通仕様の実装範囲、15言語、音設定、検証と公開設定の残件は [対応記録](docs/common-spec-2026-10-31.md) を参照してください。

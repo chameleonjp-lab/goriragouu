@@ -1,3 +1,7 @@
+import { t, setText, initI18n } from "./i18n.js";
+initI18n();
+window.__GORILLA_RAIN_READY__ = false;
+window.setTimeout(() => { if (!window.__GORILLA_RAIN_READY__) setText(document.querySelector("#loading-message"), "loadSlow"); }, 12000);
 import {
   BANANA_MAX_SURFACE_DISTANCE,
   BANANA_RESPAWN_DELAY_SECONDS,
@@ -68,8 +72,7 @@ try {
   const message = fatal?.querySelector("p");
   if (loading) loading.hidden = true;
   if (message) {
-    message.textContent =
-      "3D機能の読み込みに失敗しました。通信状態を確認して、ページを開き直してください。";
+    setText(message, "loadFailed");
   }
   if (fatal) fatal.hidden = false;
   console.error("Three.jsの読み込みに失敗しました。", error);
@@ -91,7 +94,7 @@ const QUALITY_OVERRIDE = URL_PARAMS.get("quality");
 const GAME_SLUG = "goriragouu";
 const CLIENT_VERSION = "goriragouu_v20260729_01";
 const GAME_URL = "https://chameleonjp-lab.github.io/goriragouu/";
-const RESULT_RANKING_LIMIT = 10;
+const RESULT_RANKING_LIMIT = 30;
 const SUPABASE_URL = "https://mlpnjgezrnhdxsxolyzj.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY =
   "sb_publishable_drzcy0v97knU6FgjqSgBHw_0A9XPdFM";
@@ -227,6 +230,8 @@ const ui = {
   bananaScoreFx: document.querySelector("#banana-score-fx"),
   soundButton: document.querySelector("#sound-button"),
   homeSoundButton: document.querySelector("#home-sound-button"),
+  soundVolume: document.querySelector("#sound-volume"),
+  retryRanking: document.querySelector("#retry-ranking"),
   motionButton: document.querySelector("#motion-button"),
   controlTitle: document.querySelector("#control-title"),
   controlDetail: document.querySelector("#control-detail"),
@@ -302,21 +307,28 @@ class SeededRandom {
 
 class AudioController {
   constructor() {
-    this.enabled = safeStorageGet("goriragouu-sound", "off") === "on";
+    this.enabled = safeStorageGet("goriragouu-sound", "on") !== "off";
+    const savedVolume = safeStorageGet("goriragouu-volume", "");
+    const parsedVolume = Number(savedVolume);
+    this.volume = savedVolume.trim() && Number.isFinite(parsedVolume) && parsedVolume >= 0 && parsedVolume <= 1 ? parsedVolume : 1;
+    this.voices = new Map();
+    this.timers = new Set();
+    document.addEventListener("visibilitychange", () => { if (document.hidden) this.stop(); });
+    window.addEventListener("pagehide", () => this.stop());
     this.context = null;
     this.master = null;
     this.noiseBuffer = null;
   }
 
   async unlock() {
-    if (!this.enabled) return;
+    if (!this.enabled || this.volume === 0 || document.hidden) return;
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
 
     if (!this.context) {
       this.context = new AudioContext();
       this.master = this.context.createGain();
-      this.master.gain.value = 0.42;
+      this.master.gain.value = 0.42 * this.volume;
       this.master.connect(this.context.destination);
       this.noiseBuffer = this.createNoiseBuffer();
     }
@@ -344,17 +356,51 @@ class AudioController {
   setEnabled(enabled) {
     this.enabled = enabled;
     safeStorageSet("goriragouu-sound", enabled ? "on" : "off");
+    if (!enabled) this.stop();
     if (this.master) {
       this.master.gain.setTargetAtTime(
-        enabled ? 0.42 : 0,
+        enabled ? 0.42 * this.volume : 0,
         this.context.currentTime,
         0.025,
       );
     }
   }
 
+  setVolume(value) {
+    if (!Number.isFinite(value)) return;
+    this.volume = clamp(value, 0, 1);
+    safeStorageSet("goriragouu-volume", String(this.volume));
+    if (this.volume === 0) this.stop();
+    if (this.master) this.master.gain.setTargetAtTime(this.enabled ? 0.42 * this.volume : 0, this.context.currentTime, 0.025);
+  }
+
+  stop() {
+    for (const timer of this.timers) window.clearTimeout(timer);
+    this.timers.clear();
+    for (const source of [...this.voices.keys()]) this.release(source, true);
+  }
+
+  release(source, stop = false) {
+    const nodes = this.voices.get(source);
+    if (!nodes) return;
+    this.voices.delete(source);
+    source.onended = null;
+    if (stop) { try { source.stop(); } catch {} }
+    for (const node of [source, ...nodes]) { try { node.disconnect(); } catch {} }
+  }
+
+  track(source, ...nodes) {
+    while (this.voices.size >= 24) this.release(this.voices.keys().next().value, true);
+    this.voices.set(source, nodes);
+    source.onended = () => this.release(source);
+  }
+
+  canPlay() {
+    return this.enabled && this.volume > 0 && !document.hidden && this.context?.state === "running" && this.master;
+  }
+
   tone(frequency, duration, options = {}) {
-    if (!this.enabled || !this.context || !this.master) return;
+    if (!this.canPlay()) return;
     const now = this.context.currentTime;
     const oscillator = this.context.createOscillator();
     const gain = this.context.createGain();
@@ -370,6 +416,7 @@ class AudioController {
     gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
     oscillator.connect(gain);
     gain.connect(this.master);
+    this.track(oscillator, gain);
     oscillator.start(now);
     oscillator.stop(now + duration + 0.02);
   }
@@ -379,14 +426,17 @@ class AudioController {
   }
 
   bonus() {
+    if (!this.canPlay()) return;
     [0, 0.1, 0.2].forEach((offset, index) => {
-      window.setTimeout(() => {
+      const timer = window.setTimeout(() => {
+        this.timers.delete(timer);
         this.tone([520, 660, 880][index], 0.18, {
           endFrequency: [620, 780, 1080][index],
           volume: 0.11,
           type: "triangle",
         });
       }, offset * 1000);
+      this.timers.add(timer);
     });
   }
 
@@ -399,7 +449,7 @@ class AudioController {
   }
 
   storm() {
-    if (!this.enabled || !this.context || !this.master || !this.noiseBuffer) return;
+    if (!this.canPlay() || !this.noiseBuffer) return;
     const now = this.context.currentTime;
     const source = this.context.createBufferSource();
     const filter = this.context.createBiquadFilter();
@@ -414,6 +464,7 @@ class AudioController {
     source.connect(filter);
     filter.connect(gain);
     gain.connect(this.master);
+    this.track(source, filter, gain);
     source.start(now);
     source.stop(now + 0.92);
   }
@@ -1490,6 +1541,7 @@ class GorillaRainGame {
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     this.displayName = "";
     this.scoreSubmissionRunId = 0;
+    this.rankingRequestId = 0;
     this.scoreSubmitAttempted = false;
     this.scoreSubmitFinished = false;
     this.webglContextLost = false;
@@ -2202,16 +2254,12 @@ class GorillaRainGame {
     ui.startButton.addEventListener("click", async () => {
       if (!this.acceptPlayerName()) return;
       this.requestFullscreen();
-      await this.sound.unlock();
+      void this.sound.unlock().catch(() => {});
       this.startNewGame();
     });
     ui.replayButton.addEventListener("click", async () => {
-      if (!this.displayName) {
-        this.returnHome();
-        return;
-      }
       this.requestFullscreen();
-      await this.sound.unlock();
+      void this.sound.unlock().catch(() => {});
       this.startNewGame();
     });
     ui.shareButton.addEventListener("click", () => this.shareResult());
@@ -2230,29 +2278,33 @@ class GorillaRainGame {
     }
     ui.pauseButton.addEventListener("click", () => this.pauseGame());
     ui.resumeButton.addEventListener("click", async () => {
-      await this.sound.unlock();
+      void this.sound.unlock().catch(() => {});
       this.resumeGame();
     });
     ui.soundButton.addEventListener("click", async () => {
       this.toggleSound();
-      await this.sound.unlock();
+      void this.sound.unlock().catch(() => {});
     });
     ui.homeSoundButton.addEventListener("click", async () => {
       this.toggleSound();
-      await this.sound.unlock();
+      void this.sound.unlock().catch(() => {});
     });
+    ui.soundVolume.value = String(this.sound.volume * 100);
+    ui.soundVolume.addEventListener("input", () => this.sound.setVolume(Number(ui.soundVolume.value) / 100));
+    ui.retryRanking.addEventListener("click", () => { void this.loadResultRanking(this.scoreSubmissionRunId); });
     ui.motionButton.addEventListener("click", () => {
       this.motionEnabled = !this.motionEnabled;
       safeStorageSet("goriragouu-motion", this.motionEnabled ? "on" : "off");
       this.updateOptionButtons();
     });
     ui.playerNameInput.addEventListener("input", () => {
+      safeStorageSet(NAME_STORAGE_KEY, normalizeDisplayName(ui.playerNameInput.value));
       ui.playerNameInput.closest(".player-name-card")?.classList.remove("invalid");
-      ui.playerNameMessage.textContent =
-        "この名前で結果をランキングへ自動送信します。";
+      ui.playerNameMessage.textContent = "";
+      delete ui.playerNameMessage.dataset.i18n;
     });
     ui.playerNameInput.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter") return;
+      if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
       ui.startButton.click();
     });
@@ -2298,29 +2350,19 @@ class GorillaRainGame {
     this.displayName = stored;
     ui.playerNameInput.value = stored;
     if (stored) {
-      ui.playerNameMessage.textContent =
-        `保存済みの「${stored}」でランキングへ送信します。`;
+      setText(ui.playerNameMessage, "nameSaved", {name: stored});
     }
   }
 
   acceptPlayerName() {
     const name = normalizeDisplayName(ui.playerNameInput.value);
     const card = ui.playerNameInput.closest(".player-name-card");
-    if (!name) {
-      this.displayName = "";
-      card?.classList.add("invalid");
-      ui.playerNameMessage.textContent =
-        "ランキング名を入力してからゲームを始めてください。";
-      ui.playerNameInput.focus({ preventScroll: false });
-      return false;
-    }
 
     this.displayName = name;
     ui.playerNameInput.value = name;
     card?.classList.remove("invalid");
     safeStorageSet(NAME_STORAGE_KEY, name);
-    ui.playerNameMessage.textContent =
-      `「${name}」でランキングへ自動送信します。`;
+    setText(ui.playerNameMessage, name ? "nameReady" : "guest", {name});
     ui.playerNameInput.blur();
     return true;
   }
@@ -2335,8 +2377,8 @@ class GorillaRainGame {
     this.updateBestScoreDisplays();
   }
 
-  setRankingStatus(message, state = "pending") {
-    ui.rankingStatus.textContent = message;
+  setRankingStatus(message, state = "pending", params = {}) {
+    setText(ui.rankingStatus, message, params);
     ui.rankingStatus.dataset.state = state;
   }
 
@@ -2355,13 +2397,12 @@ class GorillaRainGame {
     ui.resultRanking.setAttribute("aria-busy", "true");
     ui.resultRankingMessage.hidden = false;
     ui.resultRankingMessage.dataset.state = "loading";
-    ui.resultRankingMessage.textContent = "ランキングを読み込み中…";
+    setText(ui.resultRankingMessage, "rankingLoading");
     ui.resultRankingList.hidden = true;
     ui.resultRankingList.replaceChildren();
   }
 
   renderResultRanking(rows) {
-    const currentName = normalizeDisplayName(this.displayName);
     const fragment = document.createDocumentFragment();
     let validCount = 0;
 
@@ -2371,20 +2412,12 @@ class GorillaRainGame {
       bestScore,
     } of normalizeBestRankingRows(rows, RESULT_RANKING_LIMIT)) {
       validCount += 1;
-      const isCurrentPlayer = displayName === currentName;
+      // Display names are not stable participant IDs; do not infer a personal rank.
       const item = document.createElement("li");
-      item.classList.toggle("is-current-player", isCurrentPlayer);
-      if (isCurrentPlayer) item.setAttribute("aria-current", "true");
-      item.setAttribute(
-        "aria-label",
-        `${rank}位、${displayName}、${bestScore.toLocaleString("ja-JP")}点${
-          isCurrentPlayer ? "、あなた" : ""
-        }`,
-      );
 
       const position = document.createElement("span");
       position.className = "result-ranking-position";
-      position.textContent = `${rank}位`;
+      setText(position, "rank", {rank});
 
       const name = document.createElement("span");
       name.className = "result-ranking-name";
@@ -2392,16 +2425,11 @@ class GorillaRainGame {
       nameText.className = "result-ranking-name-text";
       nameText.textContent = displayName;
       name.appendChild(nameText);
-      if (isCurrentPlayer) {
-        const you = document.createElement("span");
-        you.className = "result-ranking-you";
-        you.textContent = "あなた";
-        name.appendChild(you);
-      }
+
 
       const scoreText = document.createElement("span");
       scoreText.className = "result-ranking-score";
-      scoreText.textContent = `${bestScore.toLocaleString("ja-JP")}点`;
+      setText(scoreText, "points", {score: bestScore});
 
       item.append(position, name, scoreText);
       fragment.appendChild(item);
@@ -2411,8 +2439,7 @@ class GorillaRainGame {
     if (validCount === 0) {
       ui.resultRankingMessage.hidden = false;
       ui.resultRankingMessage.dataset.state = "empty";
-      ui.resultRankingMessage.textContent =
-        "まだランキング記録がありません。最初の記録を目指してください。";
+      setText(ui.resultRankingMessage, "rankingEmpty");
       ui.resultRankingList.hidden = true;
       return;
     }
@@ -2424,20 +2451,25 @@ class GorillaRainGame {
 
   async loadResultRanking(runId) {
     if (runId !== this.scoreSubmissionRunId) return;
-
+    const requestId = ++this.rankingRequestId;
+    ui.retryRanking.disabled = true;
+    ui.resultRanking.setAttribute("aria-busy", "true");
+    ui.resultRankingMessage.hidden = false;
+    setText(ui.resultRankingMessage, "rankingLoading");
     try {
       const rows = await this.ranking.getBestScores(RESULT_RANKING_LIMIT);
-      if (runId !== this.scoreSubmissionRunId) return;
+      if (runId !== this.scoreSubmissionRunId || requestId !== this.rankingRequestId) return;
       this.renderResultRanking(rows);
     } catch (error) {
-      if (runId !== this.scoreSubmissionRunId) return;
+      if (runId !== this.scoreSubmissionRunId || requestId !== this.rankingRequestId) return;
       console.warn("ランキング取得に失敗しました。", error);
       ui.resultRanking.setAttribute("aria-busy", "false");
       ui.resultRankingList.hidden = true;
       ui.resultRankingMessage.hidden = false;
       ui.resultRankingMessage.dataset.state = "error";
-      ui.resultRankingMessage.textContent =
-        "ランキングを読み込めませんでした。詳細ランキングから再確認できます。";
+      setText(ui.resultRankingMessage, "rankingFailed");
+    } finally {
+      if (runId === this.scoreSubmissionRunId && requestId === this.rankingRequestId) ui.retryRanking.disabled = false;
     }
   }
 
@@ -2454,15 +2486,15 @@ class GorillaRainGame {
     const displayName = normalizeDisplayName(this.displayName);
     if (!displayName) {
       this.setRankingStatus(
-        "名前を確認できなかったため、ランキングへ送信できませんでした。",
-        "error",
+        "notPublished",
+        "guest",
       );
       this.setLabNavigationLocked(false);
       void this.loadResultRanking(runId);
       return;
     }
 
-    this.setRankingStatus("ランキングへ送信中…");
+    this.setRankingStatus("submitting");
     try {
       const result = await this.ranking.submit(displayName, score);
       if (runId !== this.scoreSubmissionRunId) return;
@@ -2470,20 +2502,19 @@ class GorillaRainGame {
       this.scoreSubmitFinished = true;
       const registeredBest = Number(result.result_best_score);
       if (Number.isFinite(registeredBest)) {
-        ui.resultBestScoreLabel.textContent = "登録名のベスト";
+        setText(ui.resultBestScoreLabel, "registeredBest");
         ui.resultBestScore.textContent = formatScore(registeredBest);
       }
       this.setRankingStatus(
-        result.is_new_best
-          ? `「${displayName}」のベスト記録を更新しました。`
-          : `「${displayName}」の記録をランキングへ送信しました。`,
+        result.is_new_best ? "submittedBest" : "submitted",
         "success",
+        {name: displayName},
       );
     } catch (error) {
       if (runId !== this.scoreSubmissionRunId) return;
       console.warn("ランキング送信に失敗しました。", error);
       this.setRankingStatus(
-        "ランキング送信に失敗しました。通信状態を確認してください。",
+        "submitFailed",
         "error",
       );
     } finally {
@@ -2516,13 +2547,11 @@ class GorillaRainGame {
 
   updateControlCopy() {
     if (IS_MOBILE) {
-      ui.controlTitle.textContent = "押したままスワイプ";
-      ui.controlDetail.textContent =
-        "画面の中央寄りを押し、逃げたい方向へ滑らせます。指を離すと止まります。";
+      setText(ui.controlTitle, "mobileTitle");
+      setText(ui.controlDetail, "mobileDetail");
     } else {
-      ui.controlTitle.textContent = "マウスでドラッグ";
-      ui.controlDetail.textContent =
-        "画面を押したまま、逃げたい方向へマウスを動かします。矢印キーも使えます。";
+      setText(ui.controlTitle, "desktopTitle");
+      setText(ui.controlDetail, "desktopDetail");
     }
   }
 
@@ -2532,10 +2561,9 @@ class GorillaRainGame {
   }
 
   updateOptionButtons() {
-    ui.motionButton.textContent = `揺れ：${this.motionEnabled ? "あり" : "なし"}`;
+    setText(ui.motionButton, this.motionEnabled ? "motionOn" : "motionOff");
     ui.motionButton.setAttribute("aria-pressed", String(this.motionEnabled));
-    const soundText = this.sound.enabled ? "あり" : "なし";
-    ui.homeSoundButton.textContent = `音：${soundText}`;
+    setText(ui.homeSoundButton, this.sound.enabled ? "soundOn" : "soundOff");
     ui.homeSoundButton.setAttribute("aria-pressed", String(this.sound.enabled));
     ui.soundButton.setAttribute("aria-pressed", String(this.sound.enabled));
     ui.soundButton.textContent = this.sound.enabled ? "♪" : "×";
@@ -2611,10 +2639,10 @@ class GorillaRainGame {
     this.scoreSubmitFinished = false;
     this.setLabNavigationLocked(false);
     this.setRankingStatus(
-      "結果はゲーム終了時にランキングへ自動送信します。",
+      "pending",
     );
     this.prepareResultRanking();
-    ui.resultBestScoreLabel.textContent = "端末の自己ベスト";
+    setText(ui.resultBestScoreLabel, "localBest");
     ui.bananaScoreFx.classList.remove("active");
     window.clearTimeout(this.scoreFxTimer);
     this.resetGameState();
@@ -2682,9 +2710,8 @@ class GorillaRainGame {
     ui.countdown.hidden = true;
     ui.pauseButton.disabled = true;
     ui.soundButton.disabled = true;
-    ui.webglErrorTitle.textContent = "3D画面を復旧しています";
-    ui.webglErrorMessage.textContent =
-      "端末の3D表示が一時停止しました。ゲームの進行も止めています。この画面のままお待ちください。";
+    setText(ui.webglErrorTitle, "recovering");
+    setText(ui.webglErrorMessage, "recoveryDetail");
     ui.webglError.hidden = false;
   }
 
@@ -2696,9 +2723,8 @@ class GorillaRainGame {
     this.lastFrameAt = performance.now();
     this.accumulator = 0;
     ui.webglError.hidden = true;
-    ui.webglErrorTitle.textContent = "3D画面を開けませんでした";
-    ui.webglErrorMessage.textContent =
-      "WebGLが使える最新のSafari、Chrome、Edgeで開き直してください。";
+    setText(ui.webglErrorTitle, "webglTitle");
+    setText(ui.webglErrorMessage, "webglDetail");
 
     if (previousMode === "playing" || previousMode === "countdown") {
       this.resumeFromMode = previousMode;
@@ -2706,7 +2732,7 @@ class GorillaRainGame {
       ui.pauseOverlay.hidden = false;
       if (!document.hidden) {
         this.resumeGame();
-        this.showToast("3D画面を復旧しました");
+        this.showToast(t("recovered"));
       }
       return;
     }
@@ -2739,7 +2765,7 @@ class GorillaRainGame {
       this.lastFrameAt = performance.now();
       this.accumulator = 0;
       this.sound.countdown(0);
-      this.showToast(this.gameElapsed > 0 ? "再開！" : "GO！ 豪雨から逃げろ");
+      this.showToast(t(this.gameElapsed > 0 ? "resumed" : "go"));
     }
   }
 
@@ -2815,8 +2841,8 @@ class GorillaRainGame {
     if (this.currentStage.index !== previousStage.index) {
       const text =
         this.currentStage.index === 1
-          ? "豪雨が2地点に拡大！ バナナも増加"
-          : "最終豪雨！ 3地点からゴリラが来る";
+          ? t("stage2")
+          : t("stage3");
       this.showToast(text, 2600);
       this.cameraShake = this.motionEnabled ? 0.18 : 0;
     }
@@ -2842,7 +2868,7 @@ class GorillaRainGame {
       const newMilestone = getBonusMilestones(this.bananaCount);
       if (newMilestone > previousMilestone) {
         this.sound.bonus();
-        this.showToast("🍌 10本！ 残り時間が5秒増えた", 2300);
+        this.showToast(t("bonusToast"), 2300);
       } else {
         this.sound.banana();
       }
@@ -3646,8 +3672,8 @@ class GorillaRainGame {
     );
     ui.timerCard.classList.toggle("urgent", remaining <= 10);
     ui.bananas.textContent = String(this.bananaCount);
-    ui.bananaNext.textContent = `あと${bananasUntilBonus(this.bananaCount)}本で +5秒`;
-    ui.phase.textContent = this.currentStage.label;
+    setText(ui.bananaNext, "bananaNext", {count: bananasUntilBonus(this.bananaCount)});
+    setText(ui.phase, "phase", {count: this.currentStage.stormLocations});
     ui.phaseDot.style.background =
       this.currentStage.index === 0
         ? "#8be5dc"
@@ -3675,26 +3701,27 @@ class GorillaRainGame {
     ui.resultBananas.textContent = String(this.bananaCount);
     ui.resultBonus.textContent = String(getBonusSeconds(this.bananaCount));
 
-    ui.resultBestScoreLabel.textContent = "端末の自己ベスト";
+    setText(ui.resultBestScoreLabel, "localBest");
     const isNewRecord = this.registerScore(score);
     if (ui.resultNewRecord) ui.resultNewRecord.hidden = !isNewRecord;
 
+    this.sound.stop();
     if (cleared) {
       ui.resultIcon.textContent = "🌤️";
-      ui.resultKicker.textContent = "SURVIVED";
-      ui.resultTitle.textContent = "ゴリラ豪雨を生還！";
-      ui.resultMessage.textContent = "最後まで逃げ切りました。";
+      setText(ui.resultKicker, "survived");
+      setText(ui.resultTitle, "clearTitle");
+      setText(ui.resultMessage, "clearMessage");
       this.sound.clear();
     } else {
       ui.resultIcon.textContent = "🦍";
-      ui.resultKicker.textContent = "CAUGHT";
-      ui.resultTitle.textContent = "ゴリラに捕まった！";
-      ui.resultMessage.textContent = "バナナを集めて、もう一度逃げよう。";
+      setText(ui.resultKicker, "caught");
+      setText(ui.resultTitle, "caughtTitle");
+      setText(ui.resultMessage, "caughtMessage");
       this.sound.gameOver();
     }
     this.showScreen("result");
     ui.result.scrollTop = 0;
-    this.setLabNavigationLocked(true);
+    this.setLabNavigationLocked(false);
     void this.submitGameScore(score, this.scoreSubmissionRunId);
     window.requestAnimationFrame(() => {
       ui.resultTitle.focus({ preventScroll: true });
@@ -3703,49 +3730,39 @@ class GorillaRainGame {
 
   async shareGame() {
     const text = [
-      "【ゴリラ豪雨】",
-      "球体の島を走り、突然降るゴリラの群れから生還を目指そう。",
+      t("gameTitle"),
+      t("shareIntro"),
     ].join("\n");
     await this.shareContent(text, ui.homeShareButton);
   }
 
   async shareResult() {
     const score = formatScore(calculateScore(this.gameElapsed, this.bananaCount));
-    const outcome = this.lastCleared ? "ゴリラ豪雨を生還！" : "ゴリラに捕まった…";
+    const outcome = t(this.lastCleared ? "clearTitle" : "caughtTitle");
     const text = [
-      "【ゴリラ豪雨】",
+      t("gameTitle"),
       outcome,
-      `生存 ${this.gameElapsed.toFixed(1)}秒 / 🍌 ${this.bananaCount}本`,
-      `SCORE ${score}`,
+      t("shareStats", {seconds: this.gameElapsed.toFixed(1), count: this.bananaCount}),
+      t("points", {score}),
     ].join("\n");
     await this.shareContent(text, ui.shareButton);
   }
 
   async shareContent(text, button) {
     const textWithUrl = `${text}\n${GAME_URL}`;
-    const shareData = { title: "ゴリラ豪雨", text, url: GAME_URL };
-    if (navigator.share) {
-      try {
-        const nativeShareData =
-          navigator.canShare && !navigator.canShare(shareData)
-            ? { title: "ゴリラ豪雨", text: textWithUrl }
-            : shareData;
-        await navigator.share(nativeShareData);
-        return;
-      } catch (error) {
-        if (error?.name === "AbortError") return;
-      }
-    }
+    const intent = new URL('https://x.com/intent/tweet');
+    intent.searchParams.set('text', textWithUrl);
+    const composer = window.open(intent.href, '_blank');
+    if (composer) { composer.opener = null; return; }
 
     try {
       await navigator.clipboard.writeText(textWithUrl);
-      const original = button.textContent;
-      button.textContent = "コピーしました";
+      setText(button, "copied");
       window.setTimeout(() => {
-        button.textContent = original;
+        setText(button, "share");
       }, 1600);
     } catch {
-      button.textContent = "コピーできませんでした";
+      window.prompt(t("copyPrompt"), textWithUrl);
     }
   }
 
