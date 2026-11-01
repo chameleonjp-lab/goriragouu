@@ -65,3 +65,21 @@
 localStorage拒否/容量不足ではメモリに保持し、再読み込み後の結果復元は保証できない。SDK読込やRPCの待機は8秒で失敗状態にし、遅いSDK応答から古い送信を開始しない。ネットワーク復帰/明示的再試行は同じIDを使用する。別担当レビューとモックで名前固定・lost ACK再読込・1つのreceipt・現在結果復元を確認し、スコアを本番へ送っていない。
 
 追加のACK検証: accepted=falseだけを恒久拒否として扱い、accepted欠落・null・型違い等の壊れた成功応答は同じUUIDで再試行可能な状態へ戻す。再読込後の同じpayloadによる有効ACK回収を回帰確認した。
+
+## 後続実装・検証 2026-11-02 04:17 JST
+
+PR16基点 `03edb855f12d01224b292953dc5709858e9d503c`、main `0bf0a884e8f8970083e01afbb6cbab3c1179b7e8`。現在DBのgoriragouuはactive/shared/desc/scale1/0桁、登録正式URLは引き続き `https://chameleonjp-lab.github.io/goriragouu/`。現公開URLはHTMLが読み込めるが今回のクラウドブラウザではWebGL利用不可の案内を表示した。これは公開済みHTMLの確認と環境制約であり、本番3D操作の受入成功やゲーム不具合の確定ではない。
+
+### 今回の修正
+
+- 保存後の全文読み戻しが一致するまでscoreを送らない。quota中は同じタブで複数pendingを保持し、保存回復後も同UUID/名前/点数/版で送る。壊れた原文・同ID異payloadは上書きせず、受理済み台帳も残す。旧不確実な記録を新しいIDで再公開しない。
+- `RankingClient.submit` はSQLの1行配列をqueueへそのまま渡す。9列ACKを厳密照合し、null/欠落/不確実な応答で記録を消さない。normal共有RPC適合を確認し、special validatorや旧RPCへ迂回しない。
+- 未保存を15言語で明示し再試行できる。enqueue衝突・保存例外は結果画面を中断しない。復元候補は最新から有効なpresentationを探し、負値/不正型/score不一致/60秒＋既存バナナ延長と矛盾する結果を表示しない。元のrawは保持する。clear判定のepsilonは既存advancePlayingFrameの1e-6に合わせ、最終tickで捕まった結果も維持する。
+- ランキング通信の不正なJSONや行を「記録なし」の成功表示に変えず取得失敗にする。元の採点/順位正規化関数は変更しない。
+- native audio interruptedでvoiceと予約音を停止し、次の操作でresumeを試す。tone/stormの部分的な音源生成失敗は個別に切断し、ゲームや結果の表示を音の成功へ依存させない。既存off/0を保持。
+- PR CIへChromium/WebKitの実DOM/3D初期化とmock通信の検査を追加。Threeは公開コードと同じ0.185.1をテスト専用に固定。テストサーバーだけが依存URLをローカルへ置換し、instanceを検査用に公開する。本番ソースに検査用操作を追加しない。
+- マージ後のPagesは検証したjobがruntime artifactを作成し、deployは同コミットのartifactだけを公開する。main SHAとPages Source=workflowを直前に照合。Sourceや権限の変更は実行していない。
+
+`src/rules.js` は全文不変。60秒・10バナナ毎5秒延長・1秒100点＋1バナナ100点・端数切捨て・表示6桁・ID・自己ベストkeyを維持する。テストで値を固定した結果検査は、本番の60秒プレイやiPhone実機受入ではない。
+
+DB receipt未適用、名前依存のidentity/厳密30参加者、Pages Source管理者設定、母語/実音/長時間/iPhone実機、マージ後本番SHA確認は未完了。共通13項目全完了ではない。以前の確認記録はその時点の資料として保持し、最新head/CIはPRの追記を参照。既存非Draft状態を維持し、マージ/公開操作は行わない。戻すときはrevert PRを使い、端末台帳と既存スコアを残す。

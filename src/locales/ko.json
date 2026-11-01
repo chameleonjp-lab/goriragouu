@@ -95,5 +95,6 @@
   "noscript": "이 게임을 하려면 JavaScript를 켜 주세요.",
   "volume": "음량",
   "retryRanking": "랭킹 다시 불러오기",
-  "retryScore": "기록 다시 전송"
+  "retryScore": "기록 다시 전송",
+  "resultUnsaved": "이 기기에 결과를 저장하지 못했습니다. 이 화면을 닫으면 결과가 사라질 수 있습니다."
 }

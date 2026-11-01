@@ -95,5 +95,6 @@
   "noscript": "请启用JavaScript后游玩。",
   "volume": "音量",
   "retryRanking": "重试排行榜",
-  "retryScore": "重试提交成绩"
+  "retryScore": "重试提交成绩",
+  "resultUnsaved": "无法在此设备上保存结果。关闭此画面可能会丢失结果。"
 }

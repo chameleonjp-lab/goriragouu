@@ -329,13 +329,14 @@ class AudioController {
 
     if (!this.context) {
       this.context = new AudioContext();
+      this.context.onstatechange = () => { if (this.context.state !== "running") this.stop(); };
       this.master = this.context.createGain();
       this.master.gain.value = 0.42 * this.volume;
       this.master.connect(this.context.destination);
       this.noiseBuffer = this.createNoiseBuffer();
     }
 
-    if (this.context.state === "suspended") {
+    if (this.context.state !== "running") {
       try {
         await this.context.resume();
       } catch {
@@ -403,9 +404,11 @@ class AudioController {
 
   tone(frequency, duration, options = {}) {
     if (!this.canPlay()) return;
+    let oscillator,gain;
+    try {
     const now = this.context.currentTime;
-    const oscillator = this.context.createOscillator();
-    const gain = this.context.createGain();
+    oscillator = this.context.createOscillator();
+    gain = this.context.createGain();
     oscillator.type = options.type || "sine";
     oscillator.frequency.setValueAtTime(frequency, now);
     if (options.endFrequency) {
@@ -421,6 +424,13 @@ class AudioController {
     this.track(oscillator, gain);
     oscillator.start(now);
     oscillator.stop(now + duration + 0.02);
+    } catch {
+      if(this.voices.has(oscillator))this.release(oscillator,true);
+      else {
+        try{oscillator?.stop()}catch{}
+        for(const node of [oscillator,gain]){try{node?.disconnect()}catch{}}
+      }
+    }
   }
 
   banana() {
@@ -452,10 +462,12 @@ class AudioController {
 
   storm() {
     if (!this.canPlay() || !this.noiseBuffer) return;
+    let source,filter,gain;
+    try {
     const now = this.context.currentTime;
-    const source = this.context.createBufferSource();
-    const filter = this.context.createBiquadFilter();
-    const gain = this.context.createGain();
+    source = this.context.createBufferSource();
+    filter = this.context.createBiquadFilter();
+    gain = this.context.createGain();
     source.buffer = this.noiseBuffer;
     filter.type = "lowpass";
     filter.frequency.setValueAtTime(430, now);
@@ -469,6 +481,13 @@ class AudioController {
     this.track(source, filter, gain);
     source.start(now);
     source.stop(now + 0.92);
+    } catch {
+      if(this.voices.has(source))this.release(source,true);
+      else {
+        try{source?.stop()}catch{}
+        for(const node of [source,filter,gain]){try{node?.disconnect()}catch{}}
+      }
+    }
   }
 
   gorilla() {
@@ -544,11 +563,13 @@ class RankingClient {
       const error = new Error("score was not accepted");error.code="PT422";throw error;
     }
     if (result?.accepted !== true) throw new Error("Invalid score acknowledgement");
-    return result;
+    return data;
   }
 
   async getBestScores(limit = RESULT_RANKING_LIMIT) {
-    return this.request("get_best_score_ranking", {p_game_slug: GAME_SLUG,p_limit: limit});
+    const rows = await this.request("get_best_score_ranking", {p_game_slug: GAME_SLUG,p_limit: limit});
+    if(!Array.isArray(rows)||rows.some(row=>!row||!Number.isSafeInteger(row.rank_no)||row.rank_no<1||typeof row.display_name!=="string"||!row.display_name.trim()||!Number.isSafeInteger(row.best_score)||row.best_score<0))throw new Error("Invalid ranking response");
+    return rows;
   }
 }
 
@@ -2485,6 +2506,7 @@ class GorillaRainGame {
   onScoreQueueChange(item, result) {
     if (item.id !== this.scorePlay?.id || this.mode !== "result") return;
     ui.retryScore.hidden = item.state !== "pending";
+    if(item.persisted===false){this.setRankingStatus("resultUnsaved","error");ui.retryScore.hidden=false;return;}
     if (item.state === "sending") this.setRankingStatus("submitting");
     else if (item.state === "submitted") {
       this.scoreSubmitFinished = true;
@@ -2496,8 +2518,11 @@ class GorillaRainGame {
   }
 
   restorePendingResult() {
-    const item = this.scoreQueue.list().at(-1), saved = item?.presentation;
-    if (!saved || !Number.isFinite(saved.gameElapsed) || !Number.isInteger(saved.bananaCount) || calculateScore(saved.gameElapsed,saved.bananaCount)!==item.payload.p_score) return;
+    const item = this.scoreQueue.list().slice().reverse().find(candidate => {
+      const saved=candidate.presentation;
+      return saved && Number.isFinite(saved.gameElapsed) && saved.gameElapsed>=0 && Number.isSafeInteger(saved.bananaCount) && saved.bananaCount>=0 && typeof saved.cleared==='boolean' && saved.gameElapsed<=BASE_GAME_SECONDS+getBonusSeconds(saved.bananaCount)+0.000001 && (!saved.cleared||getRemainingSeconds(saved.gameElapsed,saved.bananaCount)<=0.000001) && calculateScore(saved.gameElapsed,saved.bananaCount)===candidate.payload.p_score;
+    }), saved=item?.presentation;
+    if(!item)return;
     this.scorePlay = {id:item.id,name:item.payload.p_display_name,clientVersion:item.payload.p_client_version};
     this.displayName = this.scorePlay.name;
     this.gameElapsed = saved.gameElapsed;this.bananaCount = saved.bananaCount;
@@ -2515,8 +2540,10 @@ class GorillaRainGame {
     void this.loadResultRanking(runId);
     if (!this.displayName) { this.setRankingStatus("notPublished","guest"); return; }
     if (!this.scorePlay) { this.setRankingStatus("submitFailed","error"); return; }
-    this.scoreQueue.enqueue(this.scorePlay,score,{gameElapsed:this.gameElapsed,bananaCount:this.bananaCount,cleared:this.lastCleared});
-    await this.scoreQueue.drain();
+    try {
+      this.scoreQueue.enqueue(this.scorePlay,score,{gameElapsed:this.gameElapsed,bananaCount:this.bananaCount,cleared:this.lastCleared});
+      await this.scoreQueue.drain();
+    } catch { if(runId===this.scoreSubmissionRunId&&this.mode==="result")this.setRankingStatus("submitFailed","error"); }
   }
 
   showBananaScoreEffect() {

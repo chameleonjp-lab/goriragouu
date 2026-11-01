@@ -95,5 +95,6 @@
   "noscript": "Hãy bật JavaScript để chơi trò chơi này.",
   "volume": "Âm lượng",
   "retryRanking": "Tải lại bảng xếp hạng",
-  "retryScore": "Gửi lại điểm"
+  "retryScore": "Gửi lại điểm",
+  "resultUnsaved": "Không thể lưu kết quả trên thiết bị này. Kết quả có thể bị mất nếu bạn đóng màn hình này."
 }

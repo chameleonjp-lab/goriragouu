@@ -95,5 +95,6 @@
   "noscript": "Aktiviere JavaScript, um zu spielen.",
   "volume": "Lautstärke",
   "retryRanking": "Rangliste erneut laden",
-  "retryScore": "Punktestand erneut senden"
+  "retryScore": "Punktestand erneut senden",
+  "resultUnsaved": "Dein Ergebnis konnte auf diesem Gerät nicht gespeichert werden. Wenn du diesen Bildschirm schließt, kann es verloren gehen."
 }

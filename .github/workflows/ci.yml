@@ -12,7 +12,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    container: mcr.microsoft.com/playwright:v1.62.1-noble
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,4 +25,9 @@ jobs:
 
       - name: Test rules and source syntax
         run: npm test
-
+      - name: Install pinned test-only dependencies
+        run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.62.1 three@0.185.1
+      - name: Chromium integration with mocked rankings
+        run: node tools/browser-smoke.cjs
+      - name: WebKit integration with mocked rankings
+        run: BROWSER_ENGINE=webkit node tools/browser-smoke.cjs

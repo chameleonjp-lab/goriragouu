@@ -95,5 +95,6 @@
   "noscript": "Activez JavaScript pour jouer.",
   "volume": "Volume",
   "retryRanking": "Réessayer le classement",
-  "retryScore": "Réessayer l’envoi du score"
+  "retryScore": "Réessayer l’envoi du score",
+  "resultUnsaved": "Le résultat n’a pas pu être enregistré sur cet appareil. Fermer cet écran risque de le perdre."
 }

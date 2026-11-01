@@ -95,5 +95,6 @@
   "noscript": "このゲームを遊ぶにはJavaScriptを有効にしてください。",
   "volume": "音量",
   "retryRanking": "ランキングを再試行",
-  "retryScore": "記録の送信を再試行"
+  "retryScore": "記録の送信を再試行",
+  "resultUnsaved": "端末に結果を保存できません。画面を閉じると失われる場合があります。"
 }

@@ -95,5 +95,6 @@
   "noscript": "Bu oyunu oynamak için JavaScript'i etkinleştirin.",
   "volume": "Ses düzeyi",
   "retryRanking": "Sıralamayı yeniden yükle",
-  "retryScore": "Puanı yeniden gönder"
+  "retryScore": "Puanı yeniden gönder",
+  "resultUnsaved": "Sonucun bu cihaza kaydedilemedi. Bu ekranı kapatırsan sonuç kaybolabilir."
 }

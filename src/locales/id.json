@@ -95,5 +95,6 @@
   "noscript": "Aktifkan JavaScript untuk memainkan permainan ini.",
   "volume": "Volume",
   "retryRanking": "Coba lagi peringkat",
-  "retryScore": "Coba kirim skor lagi"
+  "retryScore": "Coba kirim skor lagi",
+  "resultUnsaved": "Hasil tidak dapat disimpan di perangkat ini. Hasil mungkin hilang jika layar ini ditutup."
 }

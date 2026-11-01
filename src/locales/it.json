@@ -95,5 +95,6 @@
   "noscript": "Attiva JavaScript per giocare.",
   "volume": "Volume",
   "retryRanking": "Riprova classifica",
-  "retryScore": "Riprova invio del punteggio"
+  "retryScore": "Riprova invio del punteggio",
+  "resultUnsaved": "Impossibile salvare il risultato su questo dispositivo. Chiudendo questa schermata potresti perderlo."
 }

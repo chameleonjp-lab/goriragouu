@@ -6,6 +6,7 @@ export const LANGUAGES = Object.freeze([
 ]);
 const KEY = 'goriragouu-language';
 const FALLBACK_ENGLISH = {
+  "resultUnsaved": "Your result could not be saved on this device. Closing this screen may lose it.",
   "volume": "Volume",
   "retryRanking": "Retry ranking",
   "retryScore": "Retry score submission",
