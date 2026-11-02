@@ -646,9 +646,9 @@ test("HTMLにホーム・ゲーム・結果の3画面と操作領域がある", 
   }
   assert.match(html, /viewport-fit=cover/);
   assert.match(html, /src="\.\/src\/game\.js"/);
-  assert.match(html, /豪雨は突然降る/);
+  assert.match(html, /data-i18n="intro"/);
   assert.match(html, /石は減速/);
-  assert.match(html, /木は半透明の壁/);
+  assert.match(html, /半透明の木は通り抜けられません/);
 });
 
 test("HTMLのIDは重複せず、JavaScriptが参照する画面部品が存在する", async () => {
@@ -665,7 +665,7 @@ test("HTMLのIDは重複せず、JavaScriptが参照する画面部品が存在�
   }
 });
 
-test("揺れと音は初期状態で無効になり、バナナ取得は+100を粒で示す", async () => {
+test("揺れは初期無効・音は初期有効となり、バナナ取得は+100を粒で示す", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   const game = await readFile(new URL("../src/game.js", import.meta.url), "utf8");
   const css = await readFile(new URL("../styles.css", import.meta.url), "utf8");
@@ -677,11 +677,11 @@ test("揺れと音は初期状態で無効になり、バナナ取得は+100を�
   );
   assert.match(
     html,
-    /id="home-sound-button"[\s\S]*?aria-pressed="false"[\s\S]*?音：なし/,
+    /id="home-sound-button"[\s\S]*?aria-pressed="true"[\s\S]*?音：あり/,
   );
   assert.match(
     game,
-    /safeStorageGet\("goriragouu-sound", "off"\) === "on"/,
+    /safeStorageGet\("goriragouu-sound", "on"\) !== "off"/,
   );
   assert.match(
     game,
@@ -743,21 +743,20 @@ test("プレイヤーは紫系の服を着て、実験場ランキングへ1回�
     /const GAME_URL = "https:\/\/chameleonjp-lab\.github\.io\/goriragouu\/"/,
   );
   assert.match(game, /supabase-js@2\.110\.9\/\+esm/);
-  assert.match(game, /\.rpc\("submit_score"/);
-  assert.match(game, /\.rpc\("get_best_score_ranking"/);
+  assert.match(game, /this\.request\("submit_score_once_shared_v1"/);
+  assert.match(game, /this\.request\("get_best_score_ranking"/);
   assert.match(game, /p_game_slug:\s*GAME_SLUG/);
   assert.match(game, /p_limit:\s*limit/);
-  assert.match(game, /const RESULT_RANKING_LIMIT = 10/);
-  assert.match(game, /result\.accepted !== true/);
+  assert.match(game, /const RESULT_RANKING_LIMIT = 30/);
   assert.match(game, /this\.scoreSubmitAttempted = true/);
-  assert.match(game, /this\.setLabNavigationLocked\(true\)/);
+  assert.doesNotMatch(game, /this\.setLabNavigationLocked\(true\)/);
   assert.match(game, /this\.setLabNavigationLocked\(false\)/);
   assert.doesNotMatch(game, /service_role|sb_secret_/i);
   assert.doesNotMatch(game, /window\.location\.href/);
   assert.doesNotMatch(game, /resultRankingList\.innerHTML/);
   assert.match(game, /resultRankingList\.replaceChildren/);
   assert.match(game, /nameText\.textContent = displayName/);
-  assert.match(game, /item\.setAttribute\("aria-current", "true"\)/);
+  assert.doesNotMatch(game, /item\.setAttribute\("aria-current", "true"\)/);
   assert.match(game, /void this\.loadResultRanking\(runId\)/);
   assert.match(game, /normalizeBestRankingRows\(rows, RESULT_RANKING_LIMIT\)/);
   assert.ok(

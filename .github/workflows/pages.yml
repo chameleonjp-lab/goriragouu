@@ -11,12 +11,13 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    container: mcr.microsoft.com/playwright:v1.62.1-noble
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,6 +29,23 @@ jobs:
 
       - name: Test before deployment
         run: npm test
+      - name: Install pinned test-only dependencies
+        run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.62.1 three@0.185.1
+      - name: Chromium integration with mocked rankings
+        run: node tools/browser-smoke.cjs
+      - name: WebKit integration with mocked rankings
+        run: BROWSER_ENGINE=webkit node tools/browser-smoke.cjs
+
+      - name: Prepare validated runtime files only
+        run: |
+          mkdir site
+          cp index.html styles.css site/
+          cp -R src site/
+          touch site/.nojekyll
+      - name: Upload validated commit artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
 
   deploy:
     if: github.ref == 'refs/heads/main'
@@ -45,14 +63,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload static site
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
-
+      - name: Reject superseded revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          test "$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq .object.sha)" = "$TARGET_SHA"
+          test "$(gh api repos/${{ github.repository }}/pages --jq .build_type)" = "workflow"
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

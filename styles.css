@@ -1467,3 +1467,17 @@ h1 .rain-title {
       scale(1);
   }
 }
+
+#home-share-button, #share-button { background:#000; color:#fff; min-height:44px; white-space:normal; overflow-wrap:anywhere; padding:12px; border:1px solid #444; border-radius:8px; }
+
+/* Language controls never alter the current run. Long labels remain tappable. */
+.language-control { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:16px 0; }
+.language-control select { min-height:44px; max-width:100%; padding:8px 12px; border:1px solid #7a9a91; border-radius:10px; background:#102f2b; color:#fff; font:inherit; }
+#game-title { overflow-wrap:anywhere; font-size:clamp(2.2rem, 10vw, 4.6rem); }
+.home-links, .home-options { flex-wrap:wrap; }
+.option-button, .primary-button, .secondary-button, .text-link-button { white-space:normal; overflow-wrap:anywhere; height:auto; min-height:44px; }
+.rule-strip span { overflow-wrap:anywhere; }
+#game-title { display:block; line-height:1.1; letter-spacing:-0.03em; }
+
+.volume-control { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:12px 0; min-height:44px; }
+.volume-control input { flex:1; min-width:120px; min-height:44px; accent-color:#b9f466; }

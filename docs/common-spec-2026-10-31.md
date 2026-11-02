@@ -1,0 +1,92 @@
+# 共通仕様対応記録（2026-10-31）
+
+**実験場PR43のSQL適用・読み戻し確認とPages Source設定後にマージしてください。** [実験場PR43](https://github.com/chameleonjp-lab/chameleonjp_lab/pull/43) の `common-score-receipt-v1.sql` が前提で、本PRはDBを自動変更しません。
+
+## 対象・既存契約
+
+ゴリラ豪雨は現行実験場DB `public.games` で `game_slug=goriragouu`、`is_active=true`。登録URL https://chameleonjp-lab.github.io/goriragouu/ のHTTP200と既存ゲームを確認した。詳細ランキングは https://chameleonjp-lab.github.io/chameleonjp_lab/ranking.html?game=goriragouu 。このPRの変更はまだ公開していない。
+
+基準コミット `0bf0a884e8f8970083e01afbb6cbab3c1179b7e8`、着手時の関連オープンPRなし。既存rules、README、公開設定、コード、テストを確認。Supabase `mlpnjgezrnhdxsxolyzj`、旧submit_scoreを内部で呼ぶ `submit_score_once_shared_v1`、`get_best_score_ranking`、game_slug・client_version、スコア式・丸め・60秒/10本ごとの+5秒・バナナ100点・難易度を変更しない。名前キー `chameleonjp_goriragouu_player_name`、自己ベスト `goriragouu-best-score`、音 `goriragouu-sound`、揺れ `goriragouu-motion` を維持する。
+
+新設の設定は `goriragouu-volume` と `goriragouu-language` のみ。サーバーのスコア・参加者・実験場登録情報を削除/更新していない。別originの旧CodebergページのlocalStorageを自動移行する実装ではない。旧データは残し、名前・設定の手動再入力と旧ページの自己ベスト閲覧が可能。
+
+## 対応表
+
+| 項目 | 状態 | 内容・残件 |
+|---|---|---|
+| 1 対象 | 既存で対応済み | 現在のDB登録と公開URLを照合 |
+| 2 記録・ルール | 既存維持 | 既存保存先/識別値/採点/プレイ条件は維持 |
+| 3 正式URL | 既存で対応済み | GitHub公開URLはすでに実際の登録先。新たな切替不要 |
+| 4 多言語 | 今回実装／一部未確認 | 本文・説明・状態・結果・設定・エラー・共有を15言語化。選択保存、ブラウザ言語、未対応/取得失敗はEnglish。自然さの母語確認は未実施 |
+| 5 名前・登録 | 今回実装／一部未完了 | ホーム任意/空白除外、開始時名固定、名なし公開登録なし。同一UUIDの永続再送/未送信確定結果の再読込復元を追加。サーバー名キーの移行は未完了 |
+| 6 ランキング | 今回実装／一部未完了 | 両画面詳細URL、既存集計RPC上位30、読込/空/失敗/読取再試行、古い応答排除。同名を本人と推定する表示を除去。参加者識別契約は残件 |
+| 7 X共有 | 今回実装 | 黒白「Xでシェア」、各言語の紹介/今回結果と正式URL。投稿確定は本人、ポップアップ不可ならコピー/prompt代替 |
+| 8 効果音 | 既存＋今回実装 | 既存生成SEの雰囲気維持。24声上限/ended切断、遅延音の停止と非表示抑制 |
+| 9 音設定 | 今回実装 | 初回ON/既存ゲイン、保存OFF/0保持、ホーム音量、開始はunlock成功を待たない |
+| 10 文言・画面 | 今回実装／一部未確認 | 公開範囲説明、短いルール/操作説明、長い翻訳折返し、IME誤開始抑制。実機未確認 |
+| 11 自動公開 | 今回実装／設定が必要 | 既存PR CIを継続。mainの検証成功後、runtime allowlistを公開。現行Pages source legacyのためActionsへ変更が必要（下記） |
+| 12 検証 | 実施／一部未確認 | 単体/静的56件成功。Chromiumの15言語/縦横/匿名/0保持/読取競合をモック確認（browser-check-2026-10-31.json）。iPhone実機、音の聴取、母語評価、本番配備は未確認 |
+| 13 PRと記録 | 今回実装 | 本書・PRで依存/受入/戻し方/残件を明記 |
+
+参照したサイノメ main `79b1e5733e725cd1148b10fa5699ba846e2bf57d` の15言語：ja/en/es/pt-BR/zh-Hans/fr/de/ko/ru/it/zh-Hant/id/tr/vi/th。表示の変更は進行中のrun ID・時間・バナナ数・得点・結果の送信状態を変更しない。日本語固有の問題を出すゲームではないため問題置換は対象外。
+
+## 登録とランキングの限界
+
+名なしで遊んだ結果は登録しない。入力した名は開始時に固定し、結果画面/再試行で編集値を読まない。既存の送信フラグで同一runの再送を防ぎ、ランキング再試行は読取のみ。通信待ち中も結果・ホーム/詳細/共有を操作できる。今回の結果と端末自己ベスト・サーバー自己ベストは区別する。
+
+既存DBは表示名を参加者キーに使う。名前だけで別人を統合しない共通契約はサーバー移行が必要。表示名一致を「あなた」と断定する表示は削除した。開始時にUUID/名前/client_versionを固定し、今回の確定結果をUUID別キー `goriragouu:score-pending:v1:<UUID>` に保存してからreceipt RPCへ送信する。名なしはキューへ追加しない。失われたACKは同じpayload/UUIDで再送し、未送信結果の生存時間/バナナ数/今回スコアを再読込で復元する。ACKの名前/型を確認し、そのIDだけ削除する。旧RPCへのfallbackや合成start/finishセッションは使わず、既存の採点/回数集計を維持する。
+
+## SE一覧
+
+全てブラウザ生成、課金/外部音源なし。既存音色/イベントを保持。
+
+| イベント | 役割・発音条件 | 重複・停止 | 実装 |
+|---|---|---|---|
+| 3秒カウント/開始 | 開始タイミング | 既存カウント変化時のみ | AudioController.countdown |
+| バナナ取得 | 取得の確認 | 24声上限・ended切断 | banana |
+| 10本節目 | 時間延長の確認 | OFF中は予約しない。3音の遅延タイマー管理、非表示/OFF/0で破棄 | bonus |
+| 豪雨/ゴリラ | 出現の補助 | 24声上限、buffer/filter/gainを切断 | storm/gorilla |
+| 接触で終了 | 失敗の確認 | 確定状態で1回、既存音を停止して優先 | gameOver |
+| 生還 | クリアの確認 | 確定状態で1回、既存音を停止して優先 | clear |
+
+ホームOFF操作は設定を反映してからunlockを判断。音量0・非表示は新しい音を作らず、復帰時に遅延音をまとめて鳴らさない。音の聴取評価は未実施。
+
+## 公開設定・適用順・戻し方
+
+1. 実験場PR43のSQLをレビューし、運用者が適用して `docs/chameleonjp-lab/18_common_score_receipts.md` の読み戻し確認を行う。未適用のままゲームを配備すると送信はpendingとなる。本編/結果/ランキング閲覧は停止しない。
+2. GitHub Settings → Pages → Build and deployment → Source を **GitHub Actions** にする。APIでは `PUT /repos/chameleonjp-lab/goriragouu/pages` に `{ "build_type": "workflow" }`。読み戻しはGETで `build_type=workflow`、正式html_urlを確認する。既存のbranch保護/承認は解除しない。
+3. ユーザーがPRをmainへマージ。既存CI/Pages testが通過後、index.html/styles.css/srcのみをsiteへ集め公開。開発ファイル/秘密情報は公開しない。current main SHAに一致しない古い再実行は配備前に停止する。
+4. ActionsとPages deploymentのSHA、正式URLで15言語/任意名/音量/上位30 UIを確認。このPRの本番配備確認はマージ前には未実施。
+5. 本番テストスコアを送らず、RPCモックで匿名/空白/名前変更/消去、失敗、読み直し、重複数を確認。iPhone Safariでは縦横/キーボード/画面端、日本語変換Enter、OFF/0→再読込、Xから復帰を確認する。
+6. 問題時はrevert PRをmainへマージし同じActions経路で戻す。Pages source自体を戻す場合は元のlegacy/main/`/` を復元するが、workflow配備との二重実行を避ける。利用者データ/DBの削除は不要。
+
+2026-10-31、PR作成後に公開ジョブが走っていないことを確認し、Pagesのbuild_type=workflow変更を試行したが、GitHub APIが403 `Resource not accessible by integration` を返した。読み戻しもlegacy/main/`/` のまま。自動承認レビューの拒否ではなくGitHubトークンの権限不足であり、管理者による上記Source設定が必要。公開・マージは行っていない。
+
+localStorage拒否/容量不足ではメモリに保持し、再読み込み後の結果復元は保証できない。SDK読込やRPCの待機は8秒で失敗状態にし、遅いSDK応答から古い送信を開始しない。ネットワーク復帰/明示的再試行は同じIDを使用する。別担当レビューとモックで名前固定・lost ACK再読込・1つのreceipt・現在結果復元を確認し、スコアを本番へ送っていない。
+
+追加のACK検証: accepted=falseだけを恒久拒否として扱い、accepted欠落・null・型違い等の壊れた成功応答は同じUUIDで再試行可能な状態へ戻す。再読込後の同じpayloadによる有効ACK回収を回帰確認した。
+
+## 後続実装・検証 2026-11-02 04:17 JST
+
+PR16基点 `03edb855f12d01224b292953dc5709858e9d503c`、main `0bf0a884e8f8970083e01afbb6cbab3c1179b7e8`。現在DBのgoriragouuはactive/shared/desc/scale1/0桁、登録正式URLは引き続き `https://chameleonjp-lab.github.io/goriragouu/`。現公開URLはHTMLが読み込めるが今回のクラウドブラウザではWebGL利用不可の案内を表示した。これは公開済みHTMLの確認と環境制約であり、本番3D操作の受入成功やゲーム不具合の確定ではない。
+
+### 今回の修正
+
+- 保存後の全文読み戻しが一致するまでscoreを送らない。quota中は同じタブで複数pendingを保持し、保存回復後も同UUID/名前/点数/版で送る。壊れた原文・同ID異payloadは上書きせず、受理済み台帳も残す。旧不確実な記録を新しいIDで再公開しない。
+- `RankingClient.submit` はSQLの1行配列をqueueへそのまま渡す。9列ACKを厳密照合し、null/欠落/不確実な応答で記録を消さない。normal共有RPC適合を確認し、special validatorや旧RPCへ迂回しない。
+- 未保存を15言語で明示し再試行できる。enqueue衝突・保存例外は結果画面を中断しない。復元候補は最新から有効なpresentationを探し、負値/不正型/score不一致/60秒＋既存バナナ延長と矛盾する結果を表示しない。元のrawは保持する。clear判定のepsilonは既存advancePlayingFrameの1e-6に合わせ、最終tickで捕まった結果も維持する。
+- ランキング通信の不正なJSONや行を「記録なし」の成功表示に変えず取得失敗にする。元の採点/順位正規化関数は変更しない。
+- native audio interruptedでvoiceと予約音を停止し、次の操作でresumeを試す。tone/stormの部分的な音源生成失敗は個別に切断し、ゲームや結果の表示を音の成功へ依存させない。既存off/0を保持。
+- PR CIへChromium/WebKitの実DOM/3D初期化とmock通信の検査を追加。Threeは公開コードと同じ0.185.1をテスト専用に固定。テストサーバーだけが依存URLをローカルへ置換し、instanceを検査用に公開する。本番ソースに検査用操作を追加しない。
+- マージ後のPagesは検証したjobがruntime artifactを作成し、deployは同コミットのartifactだけを公開する。main SHAとPages Source=workflowを直前に照合。Sourceや権限の変更は実行していない。
+
+`src/rules.js` は全文不変。60秒・10バナナ毎5秒延長・1秒100点＋1バナナ100点・端数切捨て・表示6桁・ID・自己ベストkeyを維持する。テストで値を固定した結果検査は、本番の60秒プレイやiPhone実機受入ではない。
+
+DB receipt未適用、名前依存のidentity/厳密30参加者、Pages Source管理者設定、母語/実音/長時間/iPhone実機、マージ後本番SHA確認は未完了。共通13項目全完了ではない。以前の確認記録はその時点の資料として保持し、最新head/CIはPRの追記を参照。既存非Draft状態を維持し、マージ/公開操作は行わない。戻すときはrevert PRを使い、端末台帳と既存スコアを残す。
+
+
+## 2026-11-02 09:39 JST: 受領応答の境界検証
+
+基準head `6f7dcd364696a89ee5a992df6f0c9e773cd82752`。通常RPCのfirst/best/play countをPostgreSQL integer範囲で検査し、現登録desc方式と一致しないbest（提出点・初回点未満）は受領済にしない。異常応答後の元キューとUUIDを保持し、再読込後の正常再送を確認。既存の合法な負の初回記録と0は保持する。旧テストのfirst=-1とbest=-1を同時に返すfixtureは、今回10点提出済のdesc契約と矛盾するためfirst=-1/best=10へ修正した。採点・識別・DBの変更はない。
+
+7異常ケースで修正前失敗→修正後成功、合法履歴3ケースを追加。全93unit/構文検査成功。独立レビューとこのheadの両ブラウザCIは別途PR本文へ記録。iPhone実機・本番公開・本人識別などの残件は完了扱いにしない。
