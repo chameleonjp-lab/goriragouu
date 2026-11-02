@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - work/goriragouu-share-acceptance-20261102
 
 permissions:
   contents: read
@@ -31,3 +32,11 @@ jobs:
         run: node tools/browser-smoke.cjs
       - name: WebKit integration with mocked rankings
         run: BROWSER_ENGINE=webkit node tools/browser-smoke.cjs
+      - name: Preserve isolated share screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: share-acceptance-${{ github.sha }}
+          path: test-artifacts/share/*.png
+          if-no-files-found: warn
+          retention-days: 7

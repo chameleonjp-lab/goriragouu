@@ -40,7 +40,7 @@ jobs:
         run: |
           mkdir site
           cp index.html styles.css site/
-          cp -R src site/
+          cp -R src assets site/
           touch site/.nojekyll
       - name: Upload validated commit artifact
         uses: actions/upload-pages-artifact@v3

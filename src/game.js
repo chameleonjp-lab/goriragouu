@@ -3772,7 +3772,7 @@ class GorillaRainGame {
   }
 
   async shareContent(text, button) {
-    const textWithUrl = `${text}\n${GAME_URL}`;
+    const textWithUrl = `${text}\n${GAME_URL}\n#ゴリラ豪雨 #ゲーム制作`;
     const intent = new URL('https://x.com/intent/tweet');
     intent.searchParams.set('text', textWithUrl);
     const composer = window.open(intent.href, '_blank');
