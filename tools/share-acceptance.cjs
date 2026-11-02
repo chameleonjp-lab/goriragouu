@@ -42,37 +42,20 @@ async function checkShareAcceptance(browser,engine,baseURL){
   await page.goto(baseURL+'?device=sp&quality=low');await page.waitForFunction(()=>window.__testGame&&window.__GORILLA_RAIN_READY__);await page.locator('#home-screen').waitFor({state:'visible'});
   const target=page.locator('#home-share-button');for(const [property,value] of [['opacity','0'],['display','none']]){const old=await target.evaluate((el,[p,v])=>{const old=el.parentElement.style[p];el.parentElement.style[p]=v;return old;},[property,value]);try{const m=await target.evaluate(targetMetrics);assert.ok(!m.visible||m.opacity===0);}finally{await target.evaluate((el,[p,v])=>el.parentElement.style[p]=v,[property,old]);}}
   for(const lang of languages){await page.selectOption('#language-select',lang);await page.waitForFunction(l=>document.documentElement.lang===l,lang);await accept(page,'#home-share-button',lang,'home',engine,dir);}
-  await page.selectOption('#language-select','ja');await page.waitForFunction(()=>document.documentElement.lang==='ja');await page.locator('#home-sound-button').click();await page.locator('#player-name-input').fill('');await page.setViewportSize({width:1200,height:800});await page.locator('#start-button').click();
-  await page.waitForFunction(()=>window.__testGame.mode==='playing');
-  // Observe a subsequent real renderer call; never invoke render, finish, or change game time.
-  const png=await page.evaluate(()=>new Promise((resolve,reject)=>{const renderer=window.__testGame.renderer,original=renderer.render;let frames=0;const timer=setTimeout(()=>{renderer.render=original;reject(Error('No actual frame for capture'))},5000);renderer.render=function(...args){const result=original.apply(this,args);if(++frames>=2){try{const png=this.domElement.toDataURL('image/png');renderer.render=original;clearTimeout(timer);resolve(png);}catch(error){renderer.render=original;clearTimeout(timer);reject(error);}}return result;};}));
-  assert.match(png,/^data:image\/png;base64,/);writeFileSync(resolve(dir,`${engine}-actual-canvas.png`),Buffer.from(png.split(',')[1],'base64'));await page.screenshot({path:resolve(dir,`${engine}-actual-game.png`)});
-  // Capture only naturally spawned, visibly sized gorillas observed in a real draw.
-  const encounter=await page.evaluate(async()=>{
-   return new Promise((resolve,reject)=>{const game=window.__testGame,renderer=game.renderer,original=renderer.render;let frames=0,observedFrames=0,maxBrownCount=0;const initial={mode:game.mode,elapsed:game.gameElapsed};
-    const timer=setTimeout(()=>{renderer.render=original;resolve({png:null,unavailable:true,observations:{initial,mode:game.mode,elapsed:game.gameElapsed,observedFrames,maxBrownCount,visibility:document.visibilityState,focused:document.hasFocus()}});},25000);
-    renderer.render=function(...args){const result=original.apply(this,args);
-     const mesh=game.gorillaRenderer.brown,visible=[];observedFrames++;maxBrownCount=Math.max(maxBrownCount,mesh.count);
-     // setBrownParts stores six boxes per gorilla, torso first. Inspect its actual world matrix, not a surface-position estimate.
-     let shown=true;for(let node=mesh;node;node=node.parent)if(!node.visible)shown=false;
-     if(shown&&mesh.material.visible&&mesh.material.opacity>0)for(let i=0;i<mesh.count;i+=6){const matrix=mesh.matrixWorld.clone();mesh.getMatrixAt(i,matrix);matrix.premultiply(mesh.matrixWorld);const scale=game.gorillaRenderer.scale.clone().setFromMatrixScale(matrix),world=game.gorillaRenderer.position.clone().setFromMatrixPosition(matrix),p=world.clone().project(game.camera);if(Math.min(scale.x,scale.y,scale.z)>0.5&&world.dot(game.camera.position)>0&&Math.abs(p.x)<0.8&&Math.abs(p.y)<0.8&&p.z>-1&&p.z<1)visible.push(i/6);}
-     frames=game.mode==='playing'&&visible.length?frames+1:0;
-     if(frames>=2){try{const png=this.domElement.toDataURL('image/png');renderer.render=original;clearTimeout(timer);resolve({png,visibleGorillas:visible.length,elapsed:game.gameElapsed});}catch(error){renderer.render=original;clearTimeout(timer);reject(error);}}return result;
-    };
-   });
-  });
-  if(encounter.png){assert.match(encounter.png,/^data:image\/png;base64,/);writeFileSync(resolve(dir,`${engine}-natural-gorilla-canvas.png`),Buffer.from(encounter.png.split(',')[1],'base64'));console.log(JSON.stringify({engine,naturalGorillaCapture:{visibleGorillas:encounter.visibleGorillas,elapsed:encounter.elapsed}}));}else{console.log(JSON.stringify({engine,naturalGorillaCaptureUnavailable:encounter.observations}));await page.screenshot({path:resolve(dir,`${engine}-natural-gorilla-unavailable.png`)});}
-  // Real mobile Start enters fullscreen. Restore browser display before viewport acceptance; game time/state keep running.
+  await page.selectOption('#language-select','ja');await page.waitForFunction(()=>document.documentElement.lang==='ja');await page.locator('#home-sound-button').click();await page.locator('#player-name-input').fill('');await page.setViewportSize({width:393,height:852});await page.locator('#start-button').click();
+  // No capture, resize, renderer wrapper or pixel reads during normal play.
   const displayState=()=>({mode:window.__testGame.mode,elapsed:window.__testGame.gameElapsed,fullscreen:!!document.fullscreenElement,visibility:document.visibilityState,focused:document.hasFocus()});
-  console.log(JSON.stringify({engine,beforeFullscreenExit:await page.evaluate(displayState)}));
-  await page.evaluate(async()=>{if(document.fullscreenElement)await document.exitFullscreen();});
-  await page.waitForFunction(()=>!document.fullscreenElement);await page.setViewportSize({width:393,height:852});
-  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  const afterDisplay=await page.evaluate(displayState);console.log(JSON.stringify({engine,afterFullscreenExit:afterDisplay}));
-  const resumedDisplayPause=afterDisplay.mode==='paused'&&await page.locator('#resume-button').isVisible();
-  if(resumedDisplayPause){await page.locator('#resume-button').click();await page.waitForFunction(()=>window.__testGame.mode==='playing');}
-  console.log(JSON.stringify({engine,displayPauseResumedByVisibleButton:resumedDisplayPause}));
-  try{await page.waitForFunction(()=>window.__testGame.mode==='result',{},{timeout:120000});}catch(error){console.log(JSON.stringify({engine,naturalResultTimeout:await page.evaluate(displayState)}));await page.screenshot({path:resolve(dir,`${engine}-natural-result-timeout.png`)});throw error;}
+  const deadline=Date.now()+120000;let resumedPause=false;
+  try{
+   for(;;){const remaining=deadline-Date.now();assert.ok(remaining>0,'Natural result exceeded 120 seconds');await page.waitForFunction(()=>['result','paused'].includes(window.__testGame.mode),{},{timeout:remaining});const state=await page.evaluate(displayState);if(state.mode==='result')break;
+    console.log(JSON.stringify({engine,naturalPlayPause:state,resumedPause}));
+    assert.ok(!resumedPause&&await page.locator('#resume-button').isVisible(),'Second pause or missing normal resume control');
+    await page.locator('#resume-button').click();resumedPause=true;
+   }
+  }catch(error){console.log(JSON.stringify({engine,naturalResultFailure:await page.evaluate(displayState)}));await page.screenshot({path:resolve(dir,`${engine}-natural-result-failure.png`)});throw error;}
+  console.log(JSON.stringify({engine,naturalPlayResumedOnce:resumedPause}));
+  // Restore browser display only after the genuine result is complete.
+  await page.evaluate(async()=>{if(document.fullscreenElement)await document.exitFullscreen();});await page.waitForFunction(()=>!document.fullscreenElement);await page.setViewportSize({width:393,height:852});
   await page.locator('#result-screen').waitFor({state:'visible'});
   const result=await page.evaluate(()=>({elapsed:window.__testGame.gameElapsed,bananas:window.__testGame.bananaCount,mode:window.__testGame.mode}));assert.ok(result.elapsed>0);assert.equal(calls.filter(x=>x==='submit_score_once_shared_v1').length,0);
   await page.evaluate(async()=>{window.__shareLanguage=await import('/src/i18n.js')});

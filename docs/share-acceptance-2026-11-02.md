@@ -34,6 +34,14 @@
 - 紹介画像の実素材：同 CI artifact `13130633436` の `webkit-natural-gorilla-canvas.png`、1020×680、SHA-256 `e9c2fb0c592be86c435babc28a846813c80dcd99817743aa36a5206ceaf868d8`。実島、青服プレイヤー、自然ゴリラ群、木、バナナ、雲を目視確認。名前・スコア HUD は含まない。
 - 素材全体を比率維持で配置し題字と事実に沿った紹介文を追加した native SVG を、既存 Inkscape 1.4 で 1200×630 PNG に書き出す。埋込 PNG 以外の外部画像・フォント取得はなく、workspace の profile/cache を使用。ゲーム中の物体を描き足さない。これは紹介用の組版画像であり、画面全体そのもののスクリーンショットとは区別する。
 
+## 最終通常プレイと素材取得の分離
+
+- 画像設定後 CI `41425143045` / `c24ee15624beec571ed2551c56d738c94d1d2345` は unit 112 件成功、Chromium の正規再開後に経過 2.6 秒で再度 paused となり結果未達。WebKit は未実行。先行成功をこの head の成功へ読み替えない。
+- 製品は長いフレーム間隔（0.5 秒超）でも正規 pause を行う保護を持つ。素材撮影負荷との関連は候補であり、実機原因の断定ではない。保護・時計・採点は変更しない。
+- 主検証はホーム受入後、393×852 のまま正規開始し、自然結果まで撮影・resize・canvas 読取・renderer wrapper を行わない。実 paused＋正規再開ボタン可視時のみ最大 1 回通常再開する。総結果待ち上限 120 秒、2 回目の pause は即座に状態と画面を保存して失敗する。結果後だけ fullscreen を解除し共有 viewport を検査する。
+- 前の独立ブラウザ試験をすべて完了後、その context を閉じてから共有受入を始め、不要な背景 renderer を残さない。試験項目は削らない。
+- 素材取得 helper は `tools/share-material-capture.cjs` に保全し、`GORILLA_CAPTURE_SHARE_MATERIAL=1` と明示したローカル mock 検証時だけ別 context で実行する。CI はこれを設定しない。既に確定した採用 PNG を検証のたびに再撮影しない。
+
 ## 未完了の受入
 
 最終紹介 PNG は 1200×630、SHA-256 `d6ed0802546d6131889b26b486be88c926ecf0d3f771369d8eccc3ec5bb6d923`。独立した画像レビューを通過し、OG/Twitter に同じ URL を設定した。metadata/PNG/公開 allowlist の回帰は未設定時に失敗してから設定後に成功した。最終固定 head の両 engine CI は別証跡で追記する。iPhone Safari 実機、実際の X 投稿・カード再取得、本人マージ後の本番配信は未確認。本作業は本番配備を行わない作業 branch と Draft PR までであり、自動マージ・DB 変更・公開切替はしない。
