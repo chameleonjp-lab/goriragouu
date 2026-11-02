@@ -47,10 +47,33 @@ async function checkShareAcceptance(browser,engine,baseURL){
   // Observe a subsequent real renderer call; never invoke render, finish, or change game time.
   const png=await page.evaluate(()=>new Promise((resolve,reject)=>{const renderer=window.__testGame.renderer,original=renderer.render;let frames=0;const timer=setTimeout(()=>{renderer.render=original;reject(Error('No actual frame for capture'))},5000);renderer.render=function(...args){const result=original.apply(this,args);if(++frames>=2){try{const png=this.domElement.toDataURL('image/png');renderer.render=original;clearTimeout(timer);resolve(png);}catch(error){renderer.render=original;clearTimeout(timer);reject(error);}}return result;};}));
   assert.match(png,/^data:image\/png;base64,/);writeFileSync(resolve(dir,`${engine}-actual-canvas.png`),Buffer.from(png.split(',')[1],'base64'));await page.screenshot({path:resolve(dir,`${engine}-actual-game.png`)});
+  // Capture only naturally spawned, visibly sized gorillas observed in a real draw.
+  const encounter=await page.evaluate(async()=>{
+   return new Promise((resolve,reject)=>{const game=window.__testGame,renderer=game.renderer,original=renderer.render;let frames=0;
+    const timer=setTimeout(()=>{renderer.render=original;reject(Error('No naturally visible gorilla within 25 seconds'));},25000);
+    renderer.render=function(...args){const result=original.apply(this,args);
+     const mesh=game.gorillaRenderer.brown,visible=[];
+     // setBrownParts stores six boxes per gorilla, torso first. Inspect its actual world matrix, not a surface-position estimate.
+     let shown=true;for(let node=mesh;node;node=node.parent)if(!node.visible)shown=false;
+     if(shown&&mesh.material.visible&&mesh.material.opacity>0)for(let i=0;i<mesh.count;i+=6){const matrix=mesh.matrixWorld.clone();mesh.getMatrixAt(i,matrix);matrix.premultiply(mesh.matrixWorld);const scale=game.gorillaRenderer.scale.clone().setFromMatrixScale(matrix),world=game.gorillaRenderer.position.clone().setFromMatrixPosition(matrix),p=world.clone().project(game.camera);if(Math.min(scale.x,scale.y,scale.z)>0.5&&world.dot(game.camera.position)>0&&Math.abs(p.x)<0.8&&Math.abs(p.y)<0.8&&p.z>-1&&p.z<1)visible.push(i/6);}
+     frames=game.mode==='playing'&&visible.length?frames+1:0;
+     if(frames>=2){try{const png=this.domElement.toDataURL('image/png');renderer.render=original;clearTimeout(timer);resolve({png,visibleGorillas:visible.length,elapsed:game.gameElapsed});}catch(error){renderer.render=original;clearTimeout(timer);reject(error);}}return result;
+    };
+   });
+  });
+  assert.match(encounter.png,/^data:image\/png;base64,/);writeFileSync(resolve(dir,`${engine}-natural-gorilla-canvas.png`),Buffer.from(encounter.png.split(',')[1],'base64'));console.log(JSON.stringify({engine,naturalGorillaCapture:{visibleGorillas:encounter.visibleGorillas,elapsed:encounter.elapsed}}));
   // Real mobile Start enters fullscreen. Restore browser display before viewport acceptance; game time/state keep running.
+  const displayState=()=>({mode:window.__testGame.mode,elapsed:window.__testGame.gameElapsed,fullscreen:!!document.fullscreenElement,visibility:document.visibilityState,focused:document.hasFocus()});
+  console.log(JSON.stringify({engine,beforeFullscreenExit:await page.evaluate(displayState)}));
   await page.evaluate(async()=>{if(document.fullscreenElement)await document.exitFullscreen();});
   await page.waitForFunction(()=>!document.fullscreenElement);await page.setViewportSize({width:393,height:852});
-  await page.waitForFunction(()=>window.__testGame.mode==='result',{},{timeout:120000});await page.locator('#result-screen').waitFor({state:'visible'});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const afterDisplay=await page.evaluate(displayState);console.log(JSON.stringify({engine,afterFullscreenExit:afterDisplay}));
+  const resumedDisplayPause=afterDisplay.mode==='paused'&&await page.locator('#resume-button').isVisible();
+  if(resumedDisplayPause){await page.locator('#resume-button').click();await page.waitForFunction(()=>window.__testGame.mode==='playing');}
+  console.log(JSON.stringify({engine,displayPauseResumedByVisibleButton:resumedDisplayPause}));
+  try{await page.waitForFunction(()=>window.__testGame.mode==='result',{},{timeout:120000});}catch(error){console.log(JSON.stringify({engine,naturalResultTimeout:await page.evaluate(displayState)}));await page.screenshot({path:resolve(dir,`${engine}-natural-result-timeout.png`)});throw error;}
+  await page.locator('#result-screen').waitFor({state:'visible'});
   const result=await page.evaluate(()=>({elapsed:window.__testGame.gameElapsed,bananas:window.__testGame.bananaCount,mode:window.__testGame.mode}));assert.ok(result.elapsed>0);assert.equal(calls.filter(x=>x==='submit_score_once_shared_v1').length,0);
   await page.evaluate(async()=>{window.__shareLanguage=await import('/src/i18n.js')});
   for(const lang of languages){await page.evaluate(lang=>window.__shareLanguage.changeLanguage(lang),lang);await accept(page,'#share-button',lang,'result',engine,dir);assert.deepEqual(await page.evaluate(()=>({elapsed:window.__testGame.gameElapsed,bananas:window.__testGame.bananaCount,mode:window.__testGame.mode})),result);}
