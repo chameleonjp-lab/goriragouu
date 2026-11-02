@@ -35,4 +35,15 @@ test('multiple SQL rows and missing acknowledgement fields remain pending',async
 
 test("bare acknowledgement object is not the SQL table transport",async()=>{const q=createScoreQueue({gameSlug:"test",storage:storage(),uuid:()=>ID,send:async()=>receipt(10)[0]});q.enqueue(q.capture("Alice","v1"),10);await q.drain();assert.equal(q.list().length,1)});
 
-test("legacy signed server scores are retained rather than reclassified",async()=>{const q=createScoreQueue({gameSlug:"test",storage:storage(),uuid:()=>ID,send:async()=>receipt(-1)});q.enqueue(q.capture("Alice","v1"),10);await q.drain();assert.equal(q.list().length,0)});
+test("legacy signed server scores are retained rather than reclassified",async()=>{const q=createScoreQueue({gameSlug:"test",storage:storage(),uuid:()=>ID,send:async()=>[{...receipt(10)[0],result_first_score:-1}]});q.enqueue(q.capture("Alice","v1"),10);await q.drain();assert.equal(q.list().length,0)});
+
+
+const invalidBounds={firstHigh:{result_first_score:2147483648},firstLow:{result_first_score:-2147483649},bestHigh:{result_best_score:2147483648},bestLow:{result_best_score:-2147483649},countHigh:{result_play_count:2147483648},worseBest:{result_best_score:9},worseThanFirst:{result_first_score:11}};
+for(const [label,patch] of Object.entries(invalidBounds))test(`normal receipt ${label} remains pending and retries unchanged`,async()=>{
+ const disk=storage(),calls=[];let invalid=true;const send=async p=>{calls.push(p);return [{...receipt(10)[0],...(invalid?patch:{was_duplicate:true})}]};
+ const q=createScoreQueue({gameSlug:'goriragouu',storage:disk,uuid:()=>ID,send});q.enqueue(q.capture('Alice','v'),10);await q.drain();assert.equal(q.list().length,1);assert.equal(q.list()[0].state,'pending');
+ invalid=false;const reload=createScoreQueue({gameSlug:'goriragouu',storage:disk,send});await reload.drain();assert.equal(reload.list().length,0);assert.deepEqual(calls[0],calls[1]);
+});
+for(const first of [0,-1,-2147483648])test(`normal receipt legal historical first ${first} remains accepted`,async()=>{
+ const q=createScoreQueue({gameSlug:'goriragouu',storage:storage(),uuid:()=>ID,send:async()=>[{...receipt(10)[0],result_first_score:first}]});q.enqueue(q.capture('Alice','v'),10);await q.drain();assert.equal(q.list().length,0);
+});

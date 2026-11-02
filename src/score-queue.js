@@ -82,6 +82,8 @@
             if (receipt?.accepted === false) { const error=new Error('Score rejected');error.code='PT422';throw error; }
             if (receipt?.accepted !== true) throw new Error('Invalid score acknowledgement');
             if (receipt.result_display_name !== item.payload.p_display_name || receipt.result_normalized_name !== item.payload.p_display_name || !Number.isSafeInteger(receipt.result_first_score) || !Number.isSafeInteger(receipt.result_best_score) || !Number.isSafeInteger(receipt.result_play_count) || receipt.result_play_count < 1 || !['was_duplicate','is_first_play','is_new_best'].every(k=>typeof receipt[k]==='boolean')) throw new Error('Invalid score acknowledgement');
+            // SQL returns signed int4 values; preserve legal historical negatives.
+            if (receipt.result_first_score < -2147483648 || receipt.result_first_score > 2147483647 || receipt.result_best_score < -2147483648 || receipt.result_best_score > 2147483647 || receipt.result_play_count > 2147483647 || receipt.result_best_score < item.payload.p_score || receipt.result_best_score < receipt.result_first_score) throw new Error('Invalid score acknowledgement');
             list();
             if(conflicts.has(item.id)){notify({...item,state:'conflict'});continue;}
             item.state='submitted';
@@ -103,3 +105,4 @@
   if (typeof module === 'object' && module.exports) module.exports=api;
   root.CommonScoreQueue=api;
 })(typeof globalThis === 'object' ? globalThis : this);
+
