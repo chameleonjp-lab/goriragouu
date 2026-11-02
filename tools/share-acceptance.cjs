@@ -46,7 +46,10 @@ async function checkShareAcceptance(browser,engine,baseURL){
   await page.waitForFunction(()=>window.__testGame.mode==='playing');
   // Observe a subsequent real renderer call; never invoke render, finish, or change game time.
   const png=await page.evaluate(()=>new Promise((resolve,reject)=>{const renderer=window.__testGame.renderer,original=renderer.render;let frames=0;const timer=setTimeout(()=>{renderer.render=original;reject(Error('No actual frame for capture'))},5000);renderer.render=function(...args){const result=original.apply(this,args);if(++frames>=2){try{const png=this.domElement.toDataURL('image/png');renderer.render=original;clearTimeout(timer);resolve(png);}catch(error){renderer.render=original;clearTimeout(timer);reject(error);}}return result;};}));
-  assert.match(png,/^data:image\/png;base64,/);writeFileSync(resolve(dir,`${engine}-actual-canvas.png`),Buffer.from(png.split(',')[1],'base64'));await page.screenshot({path:resolve(dir,`${engine}-actual-game.png`)});await page.setViewportSize({width:393,height:852});
+  assert.match(png,/^data:image\/png;base64,/);writeFileSync(resolve(dir,`${engine}-actual-canvas.png`),Buffer.from(png.split(',')[1],'base64'));await page.screenshot({path:resolve(dir,`${engine}-actual-game.png`)});
+  // Real mobile Start enters fullscreen. Restore browser display before viewport acceptance; game time/state keep running.
+  await page.evaluate(async()=>{if(document.fullscreenElement)await document.exitFullscreen();});
+  await page.waitForFunction(()=>!document.fullscreenElement);await page.setViewportSize({width:393,height:852});
   await page.waitForFunction(()=>window.__testGame.mode==='result',{},{timeout:120000});await page.locator('#result-screen').waitFor({state:'visible'});
   const result=await page.evaluate(()=>({elapsed:window.__testGame.gameElapsed,bananas:window.__testGame.bananaCount,mode:window.__testGame.mode}));assert.ok(result.elapsed>0);assert.equal(calls.filter(x=>x==='submit_score_once_shared_v1').length,0);
   await page.evaluate(async()=>{window.__shareLanguage=await import('/src/i18n.js')});
