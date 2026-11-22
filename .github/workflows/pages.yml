@@ -68,8 +68,43 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ github.sha }}
         run: |
-          test "$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq .object.sha)" = "$TARGET_SHA"
-          test "$(gh api repos/${{ github.repository }}/pages --jq .build_type)" = "workflow"
+          # Never print API bodies or raw gh diagnostics in the workflow log.
+          api_error="$(mktemp)"
+          trap 'rm -f -- "$api_error"' EXIT
+          report_api_error() {
+            local api="$1"
+            if grep -Eq '^gh: .* \(HTTP (401|403)\)$' "$api_error"; then
+              printf '::error::%s API: authorization failed (HTTP 401/403).\n' "$api"
+            elif grep -Eq '^gh: .* \(HTTP 404\)$' "$api_error"; then
+              printf '::error::%s API: not found or inaccessible (HTTP 404).\n' "$api"
+            else
+              printf '::error::%s API: request failed.\n' "$api"
+            fi
+          }
+
+          if ! current_sha="$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq .object.sha 2>"$api_error")"; then
+            report_api_error Ref
+            exit 1
+          fi
+          if ! [[ "$current_sha" =~ ^[0-9a-f]{40}$ && "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::Ref gate: missing or invalid SHA.'
+            exit 1
+          fi
+          if [[ "$current_sha" != "$TARGET_SHA" ]]; then
+            echo '::error::Ref gate: superseded revision.'
+            exit 1
+          fi
+
+          if ! source="$(gh api repos/${{ github.repository }}/pages --jq 'if .build_type == null then empty else .build_type end' 2>"$api_error")"; then
+            report_api_error Pages
+            exit 1
+          fi
+          case "$source" in
+            workflow) ;;
+            legacy) echo '::error::Pages gate: legacy publishing source.'; exit 1 ;;
+            '') echo '::error::Pages gate: missing publishing source.'; exit 1 ;;
+            *) echo '::error::Pages gate: unsupported publishing source.'; exit 1 ;;
+          esac
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
