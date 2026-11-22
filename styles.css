@@ -1472,6 +1472,7 @@ h1 .rain-title {
 
 /* Language controls never alter the current run. Long labels remain tappable. */
 .language-control { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:16px 0; }
+#home-screen .hero-card > .language-control { margin: 0 0 12px; }
 .language-control select { min-height:44px; max-width:100%; padding:8px 12px; border:1px solid #7a9a91; border-radius:10px; background:#102f2b; color:#fff; font:inherit; }
 #game-title { overflow-wrap:anywhere; font-size:clamp(2.2rem, 10vw, 4.6rem); }
 .home-links, .home-options { flex-wrap:wrap; }
