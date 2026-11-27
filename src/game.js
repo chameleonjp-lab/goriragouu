@@ -2783,6 +2783,8 @@ class GorillaRainGame {
     }
     if (this.countdownRemaining <= 0) {
       this.mode = "playing";
+      void import(/* @vite-ignore */ "https://chameleonjp-lab.github.io/chameleonjp_lab/play-start.js").then(module => module.recordPlayStart("goriragouu")).catch(() => {});
+
       ui.countdown.hidden = true;
       this.lastCountdownNumber = -1;
       this.lastFrameAt = performance.now();
